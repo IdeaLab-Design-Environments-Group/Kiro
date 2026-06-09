@@ -16,8 +16,8 @@ import type { ViewerFrame } from "../view/viewer-frame.js";
 import type { HeaderActions } from "../view/header-actions.js";
 import type { SimModal } from "../view/sim-modal.js";
 
-const SAMPLE_URL = "./examples/akde-circular.fkld";
-const SAMPLE_NAME = "akde-circular.fkld";
+const SAMPLE_URL = "./examples/akde-hex.fkld";
+const SAMPLE_NAME = "akde-hex.fkld";
 
 export class AppController {
   constructor(
