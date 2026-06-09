@@ -12,7 +12,7 @@
  *                                               mountain positive, branch-safe)
  */
 
-import { cross, dot, length, normalize, sub, type Vec3 } from "../sim/vec3.js";
+import { cross, dot, length, normalize, sub, type Vec3 } from "../core/vec3.js";
 import { faceAngles } from "./mesh.js";
 import type { DefectReport, MeshTopology, TriMesh } from "./types.js";
 

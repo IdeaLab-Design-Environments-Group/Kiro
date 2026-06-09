@@ -21,7 +21,7 @@
  * `lips` (the two boundary copies that must rejoin when folded).
  */
 
-import { distance } from "../sim/vec3.js";
+import { distance } from "../core/vec3.js";
 import { edgeKey, edgeLength, vertexWedges } from "./mesh.js";
 import { shortestPaths } from "./plan-cuts.js";
 import {

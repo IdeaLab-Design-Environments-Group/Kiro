@@ -12,7 +12,7 @@
  * Sheet, and M5 uses it to build the guided-fold goal frame from Q.
  */
 
-import type { Vec3 } from "../sim/vec3.js";
+import type { Vec3 } from "../core/vec3.js";
 
 export type { Vec3 };
 

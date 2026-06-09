@@ -26,5 +26,19 @@ export { FoldSolver, measureTheta } from "./solver.js";
 export { buildFoldScene, setupGuidedFold, singleHingeModel } from "./build.js";
 export type { FoldScene } from "./build.js";
 
+// FOLD/FKLD adapters + scene resolution (Node-safe: no Three.js anywhere below).
+export { buildSceneFromFold, isFoldable } from "./fold-adapter.js";
+export { buildScene, canSimulate, pyramidInputsFromFold } from "./scene.js";
+export type { BuiltScene, SimKind, FoldMode } from "./scene.js";
+
+// Velocity stabilization helpers (used by the sim view and tests).
+export {
+  totalKineticEnergy,
+  kineticDamp,
+  dampVelocity,
+  removeRigidBodyMotion,
+  guardFinite,
+} from "./stabilize.js";
+
 export * as vec3 from "./vec3.js";
 export type { Vec3 } from "./vec3.js";

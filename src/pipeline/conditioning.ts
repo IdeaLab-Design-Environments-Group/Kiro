@@ -11,7 +11,7 @@
  * the pipeline documents "coarse flat-faceted input required".
  */
 
-import { length, sub, cross } from "../sim/vec3.js";
+import { length, sub, cross } from "../core/vec3.js";
 import { buildTopology, countBoundaryLoops, eulerCharacteristic } from "./mesh.js";
 import { PipelineError, type ConditionReport, type MeshTopology, type TriMesh } from "./types.js";
 

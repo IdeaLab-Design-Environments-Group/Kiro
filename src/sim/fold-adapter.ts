@@ -144,7 +144,7 @@ export function buildSceneFromFold(fold: FoldFile): FoldScene {
     assignOf.set(key, mapAssignment(ea[i]));
     rawAssignOf.set(key, ea[i]);
     const deg = fa?.[i];
-    if (typeof deg === "number") explicitTarget.set(key, clampFold((deg * Math.PI) / 180));
+    if (typeof deg === "number") explicitTarget.set(key, (deg * Math.PI) / 180); // unclamped rad
   }
 
   const interiorAssignment = (a: number, b: number): EdgeAssignment => assignOf.get(ekey(a, b)) ?? "F";
@@ -205,16 +205,51 @@ export function buildSceneFromFold(fold: FoldFile): FoldScene {
       } else {
         const key = ekey(c.n3[i], c.n4[i]);
         const t = explicitTarget.get(key);
-        if (t !== undefined) c.targetTheta[i] = t;
+        if (t !== undefined) c.targetTheta[i] = clampFold(t);
         // else: keep buildModel's assignment-based default (the AKDE design)
       }
     }
     model.position.set(flat);
+  } else if (plainFold) {
+    // EXACT paper conventions (Ghassaei–Demaine–Gershenfeld §2.3, §3) for
+    // plain FOLD files — see the module doc. The engine's per-crease frame
+    // (foldNetFromMesh face1 / n3→n4 ordering over a consistently-wound net)
+    // measures fold angles in the SAME sign convention as the FOLD spec —
+    // mountain negative, valley positive — verified empirically by the
+    // pinned-hinge tests in tests/current/sim/origami-exact.test.ts. File
+    // angles therefore pass through unchanged. No MAX_FOLD clamp: targets
+    // are the file's exact angles (full flat folds ±π included), scaled
+    // live by foldPercent.
+    const c = model.creases;
+    for (let i = 0; i < c.count; i++) {
+      const key = ekey(c.n3[i], c.n4[i]);
+      const raw = rawAssignOf.get(key);
+      const t = explicitTarget.get(key); // already rad; FOLD sign convention
+      switch (raw) {
+        case "M":
+          c.targetTheta[i] = t !== undefined ? t : -Math.PI; // mountain: −
+          break;
+        case "V":
+          c.targetTheta[i] = t !== undefined ? t : Math.PI; // valley: +
+          break;
+        case "F":
+          c.targetTheta[i] = 0; // facet crease driven flat (k = l₀·k_facet)
+          break;
+        case "C":
+          break; // cut: k already 0 via cutRatio
+        default:
+          // "B", "U", or no assignment: boundary/undriven crease → k = 0
+          // (paper §2.3) — a free frictionless hinge, not a flat-driven facet.
+          c.k[i] = 0;
+          c.targetTheta[i] = 0;
+          break;
+      }
+    }
   } else {
     for (let i = 0; i < model.creases.count; i++) {
       const key = ekey(model.creases.n3[i], model.creases.n4[i]);
       const t = explicitTarget.get(key);
-      model.creases.targetTheta[i] = t !== undefined ? t : clampFold(defaultTarget(assignOf.get(key) ?? "F"));
+      model.creases.targetTheta[i] = t !== undefined ? clampFold(t) : clampFold(defaultTarget(assignOf.get(key) ?? "F"));
     }
   }
 

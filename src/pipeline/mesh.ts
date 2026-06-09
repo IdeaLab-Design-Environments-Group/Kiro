@@ -13,7 +13,7 @@
  * a directed edge appearing twice means inconsistent winding and throws.
  */
 
-import { sub, cross, dot, length } from "../sim/vec3.js";
+import { sub, cross, dot, length } from "../core/vec3.js";
 import { PipelineError, type MeshEdge, type MeshTopology, type TriMesh } from "./types.js";
 
 export function edgeKey(a: number, b: number): string {
