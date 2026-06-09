@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import * as ct from "../../fkld/cut-types.coffee";
+import * as ct from "@fkld/cut-types.coffee";
 
 const { CUT_TYPES, CUT_TYPE_INFO, isCutType, validateEdgeCutTypes } = ct;
 

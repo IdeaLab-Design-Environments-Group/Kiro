@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import * as io from "../../fkld/io.coffee";
+import * as io from "@fkld/io.coffee";
 
 const { serializeFkld, parseFkld } = io as {
   serializeFkld: (file: unknown, indent?: number | null) => string;

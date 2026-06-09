@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeState, defaultInputs } from "../../kirigami/model/geometry.js";
-import { buildFkldFile } from "../../kirigami/model/fkld-export.js";
+import { computeState, defaultInputs } from "@kirigami/model/geometry.js";
+import { buildFkldFile } from "@kirigami/model/fkld-export.js";
 import {
   summarizeFkldForDisplay,
   type SummarySection,
-} from "../../kirigami/view/fkld-metadata-summary.js";
+} from "@kirigami/view/fkld-metadata-summary.js";
 
 function defaultSummary(): SummarySection[] {
   const state = computeState(defaultInputs());

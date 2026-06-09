@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { computeState, defaultInputs } from "../../kirigami/model/geometry.js";
-import { buildFoldNet } from "../../kirigami/sim/foldnet.js";
-import * as bridge from "../../fkld/bridge.coffee";
-import * as spec from "../../fkld/spec.coffee";
-import * as cutTypes from "../../fkld/cut-types.coffee";
-import * as molecule from "../../fkld/molecule.coffee";
-import * as io from "../../fkld/io.coffee";
+import { computeState, defaultInputs } from "@kirigami/model/geometry.js";
+import { buildFoldNet } from "@kirigami/sim/foldnet.js";
+import * as bridge from "@fkld/bridge.coffee";
+import * as spec from "@fkld/spec.coffee";
+import * as cutTypes from "@fkld/cut-types.coffee";
+import * as molecule from "@fkld/molecule.coffee";
+import * as io from "@fkld/io.coffee";
 
 const { foldNetToFkld } = bridge as {
   foldNetToFkld: (

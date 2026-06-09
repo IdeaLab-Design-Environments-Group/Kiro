@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import * as spec from "../../fkld/spec.coffee";
+import * as spec from "@fkld/spec.coffee";
 
 const { NAMESPACE, KEYS, KEY_LIST, isRegisteredKey, isFkldKey } = spec;
 
