@@ -35,11 +35,14 @@ export class AppController {
   ) {
     // 3D Sim folds exactly what the VIEWER is showing (fall back to the loaded model). This keeps
     // "what you see is what gets simulated" true even when the viewer and the convert panel differ.
-    this.sim.setProvider(() => resolveSimScene(this.store.model, this.viewer.current()));
+    this.sim.setProvider(() => {
+      const { model, viewerShown } = this.store.getState();
+      return resolveSimScene(model, viewerShown);
+    });
 
-    // The viewer can load models on its own (file picker, example dropdown, drag-drop); keep the
-    // 3D Sim button in step with whatever is actually on screen there.
-    this.viewer.onLoaded((object) => this.sim.setEnabled(canSimulate(object)));
+    // The viewer can load models on its own (file picker, example dropdown, drag-drop); record
+    // what it shows in the store so sim enablement/provider derive from one source of truth.
+    this.viewer.onLoaded((object, name) => this.store.update({ viewerShown: { object, name } }));
 
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
@@ -58,7 +61,12 @@ export class AppController {
     this.convert.setStatus(state.status.msg, state.status.kind);
     this.metadata.render(m && m.kind === "fold" ? summarizeFkldForDisplay(m.object) : []);
     this.header.setKirigamizeEnabled(!!m);
-    this.sim.setEnabled(!!m && m.kind === "fold" && canSimulate(m.object));
+    // Sim enablement follows what would actually be simulated: the viewer's
+    // model first, else the loaded fold model. (Previously the viewer-driven
+    // enablement was silently overridden by the next render — now it derives
+    // consistently from state.)
+    const simObject = state.viewerShown?.object ?? (m?.kind === "fold" ? m.object : null);
+    this.sim.setEnabled(!!simObject && canSimulate(simObject));
   }
 
   // ---- intents (each: a service call + a store update) ---------------------

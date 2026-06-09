@@ -7,6 +7,7 @@ describe("model/app-store", () => {
     expect(store.getState()).toEqual({
       model: null,
       status: { msg: "No model loaded.", kind: "" },
+      viewerShown: null,
     });
   });
 

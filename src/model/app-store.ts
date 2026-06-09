@@ -7,7 +7,7 @@
  * model lives separately under `sim/` (the domain); this store only holds the
  * app/UI state that the three panels and the action buttons read.
  */
-import type { LoadedModel } from "./fold-file.js";
+import type { FoldFile, LoadedModel } from "./fold-file.js";
 
 export type StatusKind = "" | "ok" | "bad";
 
@@ -19,6 +19,14 @@ export interface Status {
 export interface AppState {
   model: LoadedModel | null;
   status: Status;
+  /**
+   * The model currently displayed in the FKLD viewer iframe — set from the
+   * viewer's `kirigamizer:viewer-loaded` events (it can load models on its
+   * own via file picker / example dropdown / drag-drop). Single source of
+   * truth for "what's on screen": the 3D Sim folds this, falling back to
+   * `model` when the viewer is empty.
+   */
+  viewerShown: { object: FoldFile; name: string } | null;
 }
 
 export type StateListener = (state: Readonly<AppState>) => void;
@@ -27,6 +35,7 @@ export class AppStore {
   private state: AppState = {
     model: null,
     status: { msg: "No model loaded.", kind: "" },
+    viewerShown: null,
   };
   private readonly listeners = new Set<StateListener>();
 

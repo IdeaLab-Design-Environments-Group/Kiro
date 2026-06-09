@@ -105,6 +105,26 @@ describe("architecture: import boundaries (docs/import-boundaries.md)", () => {
     expect(bad, bad.join("\n")).toEqual([]);
   });
 
+  it("R6: services are use-case logic — they never import view/ or controller/", () => {
+    const bad = violations(
+      (e) =>
+        e.file.startsWith("services/") &&
+        e.resolved !== null &&
+        (e.resolved.startsWith("view/") || e.resolved.startsWith("controller/")),
+    );
+    expect(bad, bad.join("\n")).toEqual([]);
+  });
+
+  it("R7: views never import services/ or controller/ (intents flow up via callbacks)", () => {
+    const bad = violations(
+      (e) =>
+        e.file.startsWith("view/") &&
+        e.resolved !== null &&
+        (e.resolved.startsWith("services/") || e.resolved.startsWith("controller/")),
+    );
+    expect(bad, bad.join("\n")).toEqual([]);
+  });
+
   it("R5: KirigamiState-family geometry/types come from @kirigami, never re-duplicated in src", () => {
     // Phase-2 ratchet: src/model/types.ts and src/model/geometry.ts were byte-identical
     // duplicates of @kirigami/model and have been deleted. They must not reappear, and

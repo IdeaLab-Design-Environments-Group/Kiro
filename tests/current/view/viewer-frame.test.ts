@@ -25,7 +25,7 @@ describe("view/viewer-frame", () => {
     );
   });
 
-  it("tracks current viewer state and forwards viewer-loaded callbacks", () => {
+  it("forwards viewer-loaded callbacks (state itself now lives in the AppStore)", () => {
     const { window } = installDom();
     const frame = new ViewerFrame();
     const loaded = vi.fn();
@@ -36,9 +36,18 @@ describe("view/viewer-frame", () => {
     });
 
     expect(loaded).toHaveBeenCalledWith({ vertices_coords: [[1, 2]] }, "from-viewer.fkld");
-    expect(frame.current()).toEqual({
-      object: { vertices_coords: [[1, 2]] },
-      name: "from-viewer.fkld",
-    });
+  });
+
+  it("notifies onLoaded eagerly when the host pushes a model via show()", () => {
+    installDom();
+    const frame = new ViewerFrame();
+    const loaded = vi.fn();
+    frame.onLoaded(loaded);
+
+    frame.show({ vertices_coords: [[3, 4]] }, "host-pushed.fkld");
+
+    // Eager: the store's viewerShown must track the push even before the
+    // viewer's kirigamizer:viewer-loaded echo arrives.
+    expect(loaded).toHaveBeenCalledWith({ vertices_coords: [[3, 4]] }, "host-pushed.fkld");
   });
 });

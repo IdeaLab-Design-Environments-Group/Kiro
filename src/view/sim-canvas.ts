@@ -1,8 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldScene, FoldSolver } from "../sim/index.js";
-import { dampVelocity, removeRigidBodyMotion } from "../sim/index.js";
-import { GpuFoldSolver } from "../sim/gpu/index.js";
+import { dampVelocity, kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
 
 /**
  * Three.js viewport for the forward fold — renders the FoldNet as lit triangle faces plus
@@ -48,7 +47,6 @@ export class SimCanvas {
   private readonly group = new THREE.Group();
 
   private fold: FoldScene | null = null;
-  private gpu: GpuFoldSolver | null = null;
   private cpu: FoldSolver | null = null;
   private geo: THREE.BufferGeometry | null = null;
   private posAttr: THREE.BufferAttribute | null = null;
@@ -65,6 +63,8 @@ export class SimCanvas {
   private framesAtTarget = 0;
   /** Max per-frame node motion (model units) below which the fold counts as still. */
   private settleEps = 1e-3;
+  /** Kinetic-energy tracker for the Otter quench used in the at-target settle phase. */
+  private prevKE = Infinity;
 
   constructor(container: HTMLElement) {
     const w = container.clientWidth || 480;
@@ -107,6 +107,7 @@ export class SimCanvas {
     this.frozen = false;
     this.settledFrames = 0;
     this.framesAtTarget = 0;
+    this.prevKE = Infinity;
     this.prevPos = model.position.slice();
 
     this.posAttr = new THREE.BufferAttribute(model.position, 3);
@@ -156,9 +157,12 @@ export class SimCanvas {
       );
     }
 
-    // Guided pyramid → GPU preferred (AKDE). Free fold → CPU only (needs the damping passes).
-    this.gpu = this.guided ? GpuFoldSolver.create(model, this.renderer) : null;
-    this.cpu = this.gpu ? null : scene.solver;
+    // CPU solver for ALL folds. The settle passes (viscous damp / Otter quench / rigid-removal)
+    // act on the CPU model.velocity; the GPU path keeps its velocity on-device and only reads
+    // positions back, so those passes were a no-op there and the guided pyramid could never be
+    // driven to a still rest (it limit-cycled until the freeze cap → the "still jitters" bug).
+    // These meshes are small enough for 40 CPU steps/frame.
+    this.cpu = scene.solver;
 
     // Frame the model AND tighten the depth range to its scale — a near/far ratio of ~250:1 instead
     // of 40000:1 gives the depth buffer the precision to stop coincident folded faces z-fighting.
@@ -173,8 +177,8 @@ export class SimCanvas {
   }
 
   /** Active solver backend, for status display. */
-  backend(): "gpu" | "cpu" | "none" {
-    return this.gpu ? "gpu" : this.cpu ? "cpu" : "none";
+  backend(): "cpu" | "none" {
+    return this.cpu ? "cpu" : "none";
   }
 
   setFoldPercent(p: number): void {
@@ -182,6 +186,7 @@ export class SimCanvas {
     this.frozen = false; // scrubbing wakes a frozen fold
     this.settledFrames = 0;
     this.framesAtTarget = 0;
+    this.prevKE = Infinity;
     this.prevPos = this.fold?.model.position.slice() ?? null; // restart the settle test from here
   }
 
@@ -214,41 +219,42 @@ export class SimCanvas {
   }
 
   private advance(): void {
-    if (!this.fold || this.frozen) return; // frozen: hold the pose, orbit only
-    if (this.guided) this.advanceGuided();
-    else this.advanceFree();
+    if (!this.fold || this.frozen || !this.cpu) return; // frozen: hold the pose, orbit only
+    const m = this.fold.model;
+
+    // --- 1. Drive the fold (smooth) ------------------------------------------------------------
+    // Guided: ease the driven boundary once per frame. Free: ease the crease targets per step and
+    // bleed velocity viscously + remove rigid drift (an un-driven mesh needs that to stay stable).
+    if (this.guided) {
+      this.foldPercent += (this.targetFold - this.foldPercent) * FOLD_EASE;
+      if (Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS) this.foldPercent = this.targetFold;
+      this.cpu.foldPercent = this.foldPercent;
+      for (let i = 0; i < STEPS_PER_FRAME; i++) this.cpu.step();
+    } else {
+      for (let i = 0; i < STEPS_PER_FRAME; i++) {
+        this.foldPercent += (this.targetFold - this.foldPercent) * FREE_PER_STEP_EASE;
+        this.cpu.foldPercent = this.foldPercent;
+        this.cpu.step();
+        dampVelocity(m, FREE_VELOCITY_DAMP);
+        removeRigidBodyMotion(m);
+      }
+      if (Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS) this.foldPercent = this.targetFold;
+    }
+
+    // --- 2. Settle (only once the shape is reached) -------------------------------------------
+    // With the boundary now static, drain the frustrated interior to a TRUE rest. Plain viscous
+    // damping only asymptotes to a limit cycle (it never reaches zero → endless twitch); the Otter
+    // quench zeros velocity each time kinetic energy stops rising, descending to a static minimum.
+    // We only quench here (not during the fold) so the fold animation itself stays smooth.
+    if (this.foldPercent === this.targetFold) {
+      this.prevKE = kineticDamp(m, this.prevKE);
+      removeRigidBodyMotion(m);
+    } else {
+      this.prevKE = Infinity;
+    }
+
     this.flushGeometry();
     this.maybeFreeze();
-  }
-
-  /** Ease the applied fold per frame and step the solver (boundary driven to the goal mesh). */
-  private advanceGuided(): void {
-    this.foldPercent += (this.targetFold - this.foldPercent) * FOLD_EASE;
-    if (Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS) this.foldPercent = this.targetFold;
-    const fp = this.foldPercent;
-    if (this.gpu) {
-      this.gpu.foldPercent = fp;
-      this.gpu.step(STEPS_PER_FRAME);
-      this.gpu.readInto(this.fold!.model);
-    } else if (this.cpu) {
-      this.cpu.foldPercent = fp;
-      for (let i = 0; i < STEPS_PER_FRAME; i++) this.cpu.step(); // solver's viscous ζ damps it
-    }
-  }
-
-  /** Free mesh (Neil's normal origami fold): quasi-static easing + smooth viscous damping +
-   *  rigid-removal (keeps an un-pinned mesh from drifting), then the shared settle/freeze. */
-  private advanceFree(): void {
-    if (!this.cpu) return;
-    const m = this.fold!.model;
-    for (let i = 0; i < STEPS_PER_FRAME; i++) {
-      this.foldPercent += (this.targetFold - this.foldPercent) * FREE_PER_STEP_EASE;
-      this.cpu.foldPercent = this.foldPercent;
-      this.cpu.step();
-      dampVelocity(m, FREE_VELOCITY_DAMP);
-      removeRigidBodyMotion(m);
-    }
-    if (Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS) this.foldPercent = this.targetFold;
   }
 
   /**
@@ -306,7 +312,6 @@ export class SimCanvas {
     this.geo?.dispose();
     this.geo = null;
     this.posAttr = null;
-    this.gpu = null;
     this.cpu = null;
   }
 }
