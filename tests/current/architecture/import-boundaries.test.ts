@@ -105,6 +105,20 @@ describe("architecture: import boundaries (docs/import-boundaries.md)", () => {
     expect(bad, bad.join("\n")).toEqual([]);
   });
 
+  it("R5: KirigamiState-family geometry/types come from @kirigami, never re-duplicated in src", () => {
+    // Phase-2 ratchet: src/model/types.ts and src/model/geometry.ts were byte-identical
+    // duplicates of @kirigami/model and have been deleted. They must not reappear, and
+    // nothing in src may resolve a relative import to them.
+    const resurrected = walk(SRC)
+      .map((p) => relative(SRC, p).split(sep).join("/"))
+      .filter((p) => p === "model/types.ts" || p === "model/geometry.ts");
+    expect(resurrected, resurrected.join("\n")).toEqual([]);
+    const bad = violations(
+      (e) => e.resolved === "model/types.js" || e.resolved === "model/geometry.js",
+    );
+    expect(bad, bad.join("\n")).toEqual([]);
+  });
+
   it("R4: src/core/** imports nothing from other src layers (and never three)", () => {
     const bad = violations(
       (e) =>

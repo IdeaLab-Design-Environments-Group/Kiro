@@ -70,8 +70,11 @@ Some dependencies are intentional:
   (never `../../fkld/` relative paths).
 - `src/pipeline/verify.ts` imports `buildSceneFromFold`/`measureTheta` from
   `src/sim/index.ts` because verification uses the same adapter as the UI.
-- `src/sim/build.ts` imports `KirigamiState` and geometry-compatible types for
-  guided AKDE scene construction.
+- `src/sim/{build,scene,foldnet}.ts` import `KirigamiState`/`computeState` etc.
+  from `@kirigami/model` for guided AKDE scene construction. `@kirigami/model`
+  is the **single source of truth** for this geometry — the former
+  `src/model/types.ts` and `src/model/geometry.ts` byte-identical copies were
+  deleted and must not reappear (enforced by rule R5 of the architecture test).
 - Shared dependency-free math lives in `src/core/` (e.g. `core/vec3.ts`);
   `src/sim/vec3.ts` is a compatibility re-export of it. `core/` imports
   nothing from other layers.

@@ -13,6 +13,7 @@
  */
 
 import type { Vec3 } from "../core/vec3.js";
+import { AppError } from "../core/errors.js";
 
 export type { Vec3 };
 
@@ -160,15 +161,15 @@ export interface VerifyReport {
 /**
  * Stage-tagged pipeline failure. Every stage throws this (never bare Error)
  * so the controller can show "<stage>: <message>" and tests can pin stages.
+ * Specializes the app-wide [[AppError]] (domain "pipeline") so a single
+ * `instanceof AppError` catch handles every domain uniformly.
  */
-export class PipelineError extends Error {
+export class PipelineError extends AppError {
   readonly stage: "import" | "conditioning" | "mesh" | "curvature" | "plan-cuts" | "unfold" | "route-seams" | "emit" | "verify";
-  readonly details?: unknown;
 
   constructor(stage: PipelineError["stage"], message: string, details?: unknown) {
-    super(`${stage}: ${message}`);
+    super("pipeline", `${stage}: ${message}`, details);
     this.name = "PipelineError";
     this.stage = stage;
-    this.details = details;
   }
 }

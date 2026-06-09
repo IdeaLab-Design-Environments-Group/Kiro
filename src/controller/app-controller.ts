@@ -15,7 +15,7 @@ import { computeState, defaultInputs } from "@kirigami/model/geometry.js";
 import { buildFkldFile } from "@kirigami/model/fkld-export.js";
 // General mesh→pattern pipeline (M1–M5).
 import { kirigamizeText } from "../pipeline/kirigamize.js";
-import { PipelineError } from "../pipeline/types.js";
+import { statusFromError } from "../core/errors.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { MetadataPanel } from "../view/metadata-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
@@ -82,7 +82,7 @@ export class AppController {
         } catch (err) {
           this.store.update({
             model: null,
-            status: { msg: `Parse error in ${name}: ${(err as Error).message}`, kind: "bad" },
+            status: statusFromError(err, "parse", `Parse error in ${name}`),
           });
         }
       } else if (ext === "obj" || ext === "stl") {
@@ -125,8 +125,10 @@ export class AppController {
         r && !r.converged ? "bad" : "ok",
       );
     } catch (err) {
-      const msg = err instanceof PipelineError ? err.message : `kirigamize failed: ${(err as Error).message}`;
-      this.store.setStatus(msg, "bad");
+      // PipelineError passes through with its "<stage>: <message>" text;
+      // anything else is wrapped with the kirigamize prefix.
+      const { msg, kind } = statusFromError(err, "pipeline", "kirigamize failed");
+      this.store.setStatus(msg, kind);
     }
   }
 
