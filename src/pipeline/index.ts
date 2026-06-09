@@ -10,3 +10,4 @@ export * from "./import.js";
 export * from "./conditioning.js";
 export * from "./curvature.js";
 export * from "./plan-cuts.js";
+export * from "./unfold.js";

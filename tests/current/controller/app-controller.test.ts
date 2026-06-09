@@ -47,6 +47,12 @@ class ViewerFrameMock {
   onLoaded(handler: (object: FoldFile, name: string) => void): void {
     this.loadedHandler = handler;
   }
+
+  /** Simulate the viewer loading a model on its own (file picker / dropdown / drag-drop). */
+  simulateViewerLoad(object: FoldFile, name: string): void {
+    this.shown = { object, name };
+    this.loadedHandler?.(object, name);
+  }
 }
 
 class HeaderActionsMock {
@@ -282,5 +288,18 @@ describe("controller/app-controller", () => {
     store.update({ model: { kind: "fold", name: "shape.fold", object: fold } });
     const built = sim.provider?.();
     expect(built?.title).toContain("shape.fold");
+  });
+
+  it("sims the model shown in the VIEWER, even when it differs from the convert-panel model", () => {
+    const { store, viewer, sim } = setup();
+    // The convert panel / store holds model A …
+    store.update({ model: { kind: "fold", name: "convert-A.fold", object: makeFold() } });
+    // … but the viewer independently loaded model B (its own file picker / example / drag-drop).
+    viewer.simulateViewerLoad(makeFold(), "viewer-B.fold");
+
+    const built = sim.provider?.();
+    expect(built).not.toBeNull();
+    expect(built?.title).toContain("viewer-B.fold"); // sims what the viewer shows, not store's A
+    expect(sim.enabledCalls.at(-1)).toBe(true); // 3D Sim button followed the viewer's model
   });
 });

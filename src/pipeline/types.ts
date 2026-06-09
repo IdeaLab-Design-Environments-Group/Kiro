@@ -85,19 +85,27 @@ export interface LipPair {
   lipB: [number, number];
 }
 
-/** One flattened developable patch (M3, `unfold.ts`). */
-export interface UnfoldedPatch {
+/**
+ * Flattened cut mesh (M3, `unfold.ts`), globally indexed: one vertex/face
+ * array for the whole cut mesh, with per-face patch labels. Cutting can
+ * legitimately disconnect the surface (e.g. a saddle fan whose faces connect
+ * only through the slit vertex), so `patchCount` may exceed 1; each patch is
+ * laid out around its own origin and M4's packer translates patches apart.
+ */
+export interface UnfoldResult {
+  /** Flat position per cut-mesh vertex (mm); patches laid out independently. */
   flat: Vec2[];
+  /** Cut-mesh triangles (global vertex indices). */
   faces: [number, number, number][];
-  /** Provenance chain: flat vertex → Q vertex. */
+  /** Connected-component label per face. */
+  patchOfFace: number[];
+  patchCount: number;
+  /** Provenance chain: cut-mesh vertex → Q vertex. */
   origVertex: number[];
+  /** Cut-edge lip pairs (global cut-mesh vertex ids). */
   lips: LipPair[];
   /** Source-mesh edge ids added by the relief loop. */
   reliefEdges: number[];
-}
-
-export interface UnfoldResult {
-  patches: UnfoldedPatch[];
   /** Sum of source-edge lengths over all cuts incl. relief (mm). */
   totalCutLength: number;
 }
