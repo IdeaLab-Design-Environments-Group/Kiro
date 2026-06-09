@@ -25,9 +25,9 @@ will plug in.
 └──────────────────────────────────────────────────────────────┘
 ```
 
-- **Convert** (`src/main.ts`): drop/pick a model → see Derived facts → header
-  **Kirigamize ▶**.
-- **FKLD metadata** (`src/fkld-metadata.ts`, adapted from AKDE): File header,
+- **Convert** (`src/view/convert-panel.ts` + `src/controller/app-controller.ts`):
+  drop/pick a model → see Derived facts → header **Kirigamize ▶**.
+- **FKLD metadata** (`src/model/fkld-metadata.ts`, adapted from AKDE): File header,
   Topology, `edges_assignment`, `fkld:edges_cutType`, Molecules, architecture —
   read straight from the loaded object.
 - **Viewer** (`public/viewer/index.html`): the dependency-free FKLD viewer
@@ -36,9 +36,10 @@ will plug in.
 - **3D Sim** (`src/sim/`, `src/view/sim-modal.ts`): a header button opens a
   Three.js modal that **folds the loaded crease pattern**, using AKDE's sim
   ported here (copied from AKDE, which is left untouched):
-  - `model`/`forces`/`solver`/`vec3`/`foldnet`/`build`/`gpu/` + `sim-canvas` —
-    the full Gershenfeld bar-and-hinge stack, GPU solver
+  - `src/sim/model`/`forces`/`solver`/`vec3`/`foldnet`/`build`/`gpu/` — the
+    Gershenfeld bar-and-hinge simulation domain, GPU solver
     (`GPUComputationRenderer`) with CPU fallback.
+  - `src/view/sim-canvas.ts` — the Three.js/WebGL view for the simulation.
   - **Guided mode** (`scene.ts`): when the model is a recognizable AKDE pyramid,
     its inputs (N, L, H, T) are recovered from `frame_title`, rebuilt into a
     `KirigamiState` via `model/geometry.computeState`, and folded with AKDE's
@@ -69,12 +70,16 @@ npm run preview   # serve the production build
 | Path | Role |
 |------|------|
 | `index.html` | Vite entry (header + `#app` grid + footer) |
-| `src/main.ts` | builds the 3-column layout, wires convert ↔ viewer |
-| `src/fkld-metadata.ts` | FKLD/FOLD → metadata sections (pure, testable) |
-| `src/types.ts` | minimal FOLD/FKLD typings |
+| `src/main.ts` | MVC composition root only |
+| `src/controller/app-controller.ts` | controller: view intents, file IO/parsing, store updates, viewer actions |
+| `src/model/app-store.ts` | observable application state |
+| `src/model/fold-file.ts` | minimal FOLD/FKLD typings |
+| `src/model/derive-facts.ts` | loaded model → Derived rows presenter |
+| `src/model/fkld-metadata.ts` | FKLD/FOLD → metadata sections presenter |
+| `src/model/geometry.ts` · `src/model/types.ts` | kirigami geometry/domain calculations |
+| `src/view/` | DOM/WebGL views: convert panel, metadata panel, viewer frame, header actions, sim modal/canvas |
 | `src/styles.css` | AKDE-derived theme (incl. 3D-sim modal) |
-| `src/sim/` | bar-and-hinge fold engine (`vec3`/`forces`/`model`/`solver` from AKDE) + `foldnet` + `fold-adapter` (FOLD→scene) + `sim-canvas` (Three.js) |
-| `src/view/sim-modal.ts` | "3D Sim" button + folding modal |
+| `src/sim/` | simulation domain: bar-and-hinge fold engine + `fold-adapter`/`scene` builders |
 | `public/viewer/index.html` | FKLD viewer (copied from FKLD, + host bridge) |
 | `public/examples/` | bundled `.fkld` / `.fold` samples |
 | `*_algorithms.tex` · `*_algorithms.pdf` | Origamizer / Kirigamizer algorithm diagrams (reference) |
