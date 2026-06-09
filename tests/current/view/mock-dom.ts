@@ -28,7 +28,7 @@ export class MockElement {
   readonly children: MockElement[] = [];
   readonly listeners = new Map<string, Listener[]>();
   classList = new MockClassList();
-  className = "";
+  private _className = "";
   textContent = "";
   hidden = false;
   disabled = false;
@@ -36,11 +36,21 @@ export class MockElement {
   accept = "";
   title = "";
   src = "";
+  value = "";
   files?: File[];
   innerHTMLValue = "";
   contentWindow?: { postMessage: (payload: unknown, target: string) => void };
 
   constructor(readonly tagName: string) {}
+
+  set className(value: string) {
+    this._className = value;
+    this.classList = new MockClassList(value);
+  }
+
+  get className(): string {
+    return this._className;
+  }
 
   append(...nodes: any[]): void {
     for (const node of nodes) {
@@ -48,6 +58,11 @@ export class MockElement {
         this.children.push(node);
       }
     }
+  }
+
+  appendChild(node: MockElement): MockElement {
+    this.append(node);
+    return node;
   }
 
   addEventListener(type: string, listener: Listener): void {
@@ -67,16 +82,44 @@ export class MockElement {
   set innerHTML(value: string) {
     this.innerHTMLValue = value;
     this.children.length = 0;
+    const tagRe = /<([a-z0-9-]+)([^>]*)>([^<]*)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = tagRe.exec(value))) {
+      const [, tag, attrs, text] = match;
+      const child = new MockElement(tag);
+      const classMatch = /class="([^"]+)"/.exec(attrs);
+      if (classMatch) child.className = classMatch[1];
+      const typeMatch = /type="([^"]+)"/.exec(attrs);
+      if (typeMatch) child.type = typeMatch[1];
+      const minMatch = /min="([^"]+)"/.exec(attrs);
+      if (minMatch) (child as any).min = minMatch[1];
+      const maxMatch = /max="([^"]+)"/.exec(attrs);
+      if (maxMatch) (child as any).max = maxMatch[1];
+      const stepMatch = /step="([^"]+)"/.exec(attrs);
+      if (stepMatch) (child as any).step = stepMatch[1];
+      const valueMatch = /value="([^"]+)"/.exec(attrs);
+      if (valueMatch) child.value = valueMatch[1];
+      if (text.trim()) child.textContent = text.trim();
+      this.children.push(child);
+    }
   }
 
   get innerHTML(): string {
     return this.innerHTMLValue;
+  }
+
+  querySelector(selector: string): MockElement | null {
+    if (selector.startsWith(".")) {
+      return childByClass(this, selector.slice(1)) ?? null;
+    }
+    return childrenByTag(this, selector)[0] ?? null;
   }
 }
 
 export class MockDocument {
   readonly body = new MockElement("body");
   readonly created: MockElement[] = [];
+  private readonly listeners = new Map<string, Listener[]>();
 
   createElement(tag: string): MockElement {
     const element = new MockElement(tag);
@@ -84,8 +127,21 @@ export class MockDocument {
     return element;
   }
 
-  querySelector(): MockElement | null {
-    return null;
+  querySelector(selector: string): MockElement | null {
+    if (selector.startsWith(".")) {
+      return childByClass(this.body, selector.slice(1)) ?? null;
+    }
+    return childrenByTag(this.body, selector)[0] ?? null;
+  }
+
+  addEventListener(type: string, listener: Listener): void {
+    const list = this.listeners.get(type) ?? [];
+    list.push(listener);
+    this.listeners.set(type, list);
+  }
+
+  dispatch(type: string, event: any): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 }
 

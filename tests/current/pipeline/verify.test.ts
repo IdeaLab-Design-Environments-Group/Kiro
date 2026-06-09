@@ -43,16 +43,21 @@ describe("sampledHausdorff", () => {
 });
 
 describe("the equilibrium oracle bites (negative test)", () => {
-  it("a tampered goal frame fails verification", { timeout: 60_000 }, async () => {
+  it("a non-isometric flat pattern fails verification", { timeout: 60_000 }, async () => {
     const { kirigamize } = await import("../../../src/pipeline/kirigamize.js");
     const { verifyFold } = await import("../../../src/pipeline/verify.js");
     const { makeTent } = await import("./fixtures/targets.js");
     const tent = makeTent();
     const result = kirigamize(tent, { verify: false });
-    // Corrupt the goal: shove one goal vertex 40mm off. The "folded state"
-    // is no longer an equilibrium of the pattern → strain + drift.
-    const frames = result.fkld.file_frames as { vertices_coords: number[][] }[];
-    frames[0].vertices_coords[7][2] += 40;
+    // Corrupt the PATTERN: stretch the flat sheet 50% in x. Bar rest lengths
+    // derive from the flat net, so no pose matching the goal can be
+    // unstrained — the folded state is not an equilibrium of this pattern.
+    // (A tampered goal frame is healed by the solver — it relaxes back to
+    // the true shape; and the loader's uniform normalization absorbs small
+    // anisotropy into sub-tolerance mean strain, so the corruption must be
+    // decisive.)
+    const coords = result.fkld.vertices_coords as number[][];
+    for (const c of coords) c[0] *= 1.5;
     const report = verifyFold(result.fkld, tent);
     expect(report.converged).toBe(false);
     expect(report.meanStrain > 0.01 || report.dH > report.epsilon || report.creaseResidual > 0.15).toBe(true);

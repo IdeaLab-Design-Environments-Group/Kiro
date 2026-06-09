@@ -23,19 +23,34 @@ function foldExample(path: string) {
   return { fold, model };
 }
 
-function meanStrain(model: { beams: { count: number; n0: Int32Array; n1: Int32Array; rest: Float32Array }; position: Float32Array }): number {
+/**
+ * Mean strain over bars NOT between two driven nodes. Bars between driven
+ * pairs are excluded because the AKDE design deliberately collapses some of
+ * them: each molecule's outer corner pair is driven to MERGE at a base-ring
+ * vertex (goal distance 0 vs rest w), so those bars read ≈0.52 "strain" at
+ * the goal pose by design (identical on the original and regenerated
+ * decagon). The free bars are the material that must fold isometrically.
+ */
+function freeBarStrain(model: {
+  beams: { count: number; n0: Int32Array; n1: Int32Array; rest: Float32Array };
+  position: Float32Array;
+  driven: Uint8Array;
+}): number {
   let s = 0;
+  let n = 0;
   for (let i = 0; i < model.beams.count; i++) {
     const a = model.beams.n0[i];
     const b = model.beams.n1[i];
+    if (model.driven[a] && model.driven[b]) continue;
     const l = Math.hypot(
       model.position[3 * a] - model.position[3 * b],
       model.position[3 * a + 1] - model.position[3 * b + 1],
       model.position[3 * a + 2] - model.position[3 * b + 2],
     );
     s += Math.abs(l / model.beams.rest[i] - 1);
+    n++;
   }
-  return s / model.beams.count;
+  return s / Math.max(1, n);
 }
 
 describe("bundled AKDE guided examples fold cleanly (chimera goal frames)", () => {
@@ -62,7 +77,7 @@ describe("bundled AKDE guided examples fold cleanly (chimera goal frames)", () =
         gHi = Math.max(gHi, model.goal[3 * i + 2]);
       }
       expect(zHi - zLo).toBeGreaterThan(0.8 * (gHi - gLo));
-      expect(meanStrain(model)).toBeLessThan(0.1); // near-isometric tuck
+      expect(freeBarStrain(model)).toBeLessThan(0.1); // near-isometric tuck
       for (let i = 0; i < model.position.length; i++) expect(Number.isFinite(model.position[i])).toBe(true);
     });
   }
