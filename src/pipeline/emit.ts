@@ -55,10 +55,6 @@ export interface EmitOptions {
   strategy?: string;
 }
 
-interface ValidatorResult {
-  ok: boolean;
-  errors: { index: number; message: string }[];
-}
 
 export function emitFkld(sheet: Sheet, opts: EmitOptions): FoldFile {
   const { defects, target, topo } = opts;
@@ -152,14 +148,14 @@ export function emitFkld(sheet: Sheet, opts: EmitOptions): FoldFile {
   };
 
   // --- self-validation before return -----------------------------------------
-  const cutRes = validateEdgeCutTypes(edges_assignment, file[KEYS.edges.cutType]) as ValidatorResult;
+  const cutRes = validateEdgeCutTypes(edges_assignment, file[KEYS.edges.cutType]);
   if (!cutRes.ok) {
     throw new PipelineError("emit", `cut-subtype validation failed: ${cutRes.errors[0]?.message}`, cutRes.errors);
   }
   const molRes = validateMoleculeArrays(edges_vertices, {
     theta: moleculeTheta,
     width: moleculeWidth,
-  }) as ValidatorResult;
+  });
   if (!molRes.ok) {
     throw new PipelineError("emit", `molecule validation failed: ${molRes.errors[0]?.message}`, molRes.errors);
   }
