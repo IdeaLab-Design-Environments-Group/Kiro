@@ -18,6 +18,8 @@ export class ViewerFrame {
   private readonly iframe: HTMLIFrameElement;
   private ready = false;
   private pending: LoadPayload | null = null;
+  /** The object currently displayed — so the 3D Sim folds exactly what the viewer shows. */
+  private shown: { object: FoldFile; name: string } | null = null;
 
   constructor() {
     this.element = el("section", "column viewer-column");
@@ -39,9 +41,15 @@ export class ViewerFrame {
 
   /** Show a FOLD/FKLD object in the viewer (queued until the viewer is ready). */
   show(object: FoldFile, name: string): void {
+    this.shown = { object, name };
     const payload: LoadPayload = { type: "kirigamizer:load", fkld: object, name };
     if (this.ready) this.post(payload);
     else this.pending = payload;
+  }
+
+  /** The FOLD/FKLD object currently displayed in the viewer, or null if nothing has loaded. */
+  current(): { object: FoldFile; name: string } | null {
+    return this.shown;
   }
 
   private post(payload: LoadPayload): void {

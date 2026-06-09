@@ -118,6 +118,11 @@ export class SimCanvas {
       flatShading: true,
       metalness: 0.0,
       roughness: 0.75,
+      // Push faces slightly back in depth so the crease/cut lines (which share the same vertex
+      // buffer, hence the same depth) sit cleanly on top instead of z-fighting and overlapping.
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
     });
     this.group.add(new THREE.Mesh(geo, faceMat));
 

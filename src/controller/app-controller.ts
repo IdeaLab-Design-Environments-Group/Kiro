@@ -31,12 +31,14 @@ export class AppController {
     private readonly header: HeaderActions,
     private readonly sim: SimModal,
   ) {
-    // 3D Sim builds its scene from whatever foldable model is current.
+    // 3D Sim folds exactly what the VIEWER is showing (fall back to the loaded model). This keeps
+    // "what you see is what gets simulated" true even when the viewer and the convert panel differ.
     this.sim.setProvider(() => {
-      const m = this.store.model;
-      if (!m || m.kind !== "fold") return null;
-      const built = buildScene(m.object);
-      return built ? { scene: built.scene, title: `${m.name} (${built.mode})` } : null;
+      const shown = this.viewer.current();
+      const src = shown ?? (this.store.model?.kind === "fold" ? this.store.model : null);
+      if (!src) return null;
+      const built = buildScene(src.object);
+      return built ? { scene: built.scene, title: `${src.name} (${built.mode})` } : null;
     });
 
     // View intents → controller handlers.
