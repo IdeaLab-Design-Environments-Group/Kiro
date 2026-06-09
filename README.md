@@ -65,6 +65,14 @@ npm run build     # tsc --noEmit + vite build → dist/
 npm run preview   # serve the production build
 ```
 
+## Documentation
+
+| Doc | Purpose |
+|------|---------|
+| `docs/architecture.md` | MVC boundaries, data flow, and file ownership. |
+| `docs/simulation.md` | Bar-and-hinge solver structure, guided/free modes, and debugging notes. |
+| `docs/development.md` | Local commands, feature-placement rules, testing expectations, and generated-file notes. |
+
 ## Files
 
 | Path | Role |
@@ -80,6 +88,7 @@ npm run preview   # serve the production build
 | `src/view/` | DOM/WebGL views: convert panel, metadata panel, viewer frame, header actions, sim modal/canvas |
 | `src/styles.css` | AKDE-derived theme (incl. 3D-sim modal) |
 | `src/sim/` | simulation domain: bar-and-hinge fold engine + `fold-adapter`/`scene` builders |
+| `docs/` | architecture, simulation, and development notes |
 | `public/viewer/index.html` | FKLD viewer (copied from FKLD, + host bridge) |
 | `public/examples/` | bundled `.fkld` / `.fold` samples |
 | `*_algorithms.tex` · `*_algorithms.pdf` | Origamizer / Kirigamizer algorithm diagrams (reference) |

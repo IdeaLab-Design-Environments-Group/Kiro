@@ -3,6 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldScene } from "../sim/index.js";
 import type { FoldSolver } from "../sim/solver.js";
 import { GpuFoldSolver } from "../sim/gpu/gpu-solver.js";
+import { dampVelocity, kineticDamp, removeRigidBodyMotion } from "../sim/stabilize.js";
 
 /**
  * Three.js viewport for the forward fold — ported from AKDE's `sim-canvas.ts`.
@@ -215,10 +216,10 @@ export class SimCanvas {
       this.gpu.readInto(this.fold!.model);
     } else if (this.cpu) {
       this.cpu.foldPercent = fp;
-      const v = this.fold!.model.velocity;
+      const model = this.fold!.model;
       for (let i = 0; i < STEPS_PER_FRAME; i++) {
         this.cpu.step();
-        this.kineticDamp(v);
+        this.prevKE = kineticDamp(model, this.prevKE); // Otter quench (shared with the solver)
       }
     }
     this.flushGeometry();
@@ -237,24 +238,6 @@ export class SimCanvas {
     }
   }
 
-  /**
-   * Kinetic damping (Otter's quenched dynamics): whenever total kinetic energy stops rising,
-   * the system has passed an equilibrium, so zero all velocities. With the boundary driven to
-   * the goal mesh, this drains the interior molecules' bending energy to a dead-still static
-   * pose — killing the limit-cycle "jitter" that plain viscous damping leaves behind, while the
-   * momentum kept during each descent makes the fold converge quickly.
-   */
-  private kineticDamp(v: Float32Array): void {
-    let ke = 0;
-    for (let i = 0; i < v.length; i++) ke += v[i] * v[i];
-    if (ke < this.prevKE) {
-      v.fill(0);
-      this.prevKE = 0;
-    } else {
-      this.prevKE = ke;
-    }
-  }
-
   /** Free mesh: quasi-static per-step easing + velocity damping + rigid-removal, then freeze. */
   private advanceFree(): void {
     if (this.frozen || !this.cpu) return; // frozen: hold the pose, orbit only
@@ -263,7 +246,8 @@ export class SimCanvas {
       this.foldPercent += (this.targetFold - this.foldPercent) * FREE_PER_STEP_EASE;
       this.cpu.foldPercent = this.foldPercent;
       this.cpu.step();
-      this.settleVelocity(m);
+      dampVelocity(m, FREE_VELOCITY_DAMP); // viscous bleed, then remove the rigid component
+      removeRigidBodyMotion(m);
     }
     this.flushGeometry();
     if (Math.abs(this.targetFold - this.foldPercent) < FREE_FOLD_REACHED_EPS) {
@@ -276,36 +260,6 @@ export class SimCanvas {
   private flushGeometry(): void {
     if (this.posAttr) this.posAttr.needsUpdate = true;
     this.geo?.computeVertexNormals();
-  }
-
-  /** Damp node velocity, then remove the global rigid-body component viscous damping can't touch. */
-  private settleVelocity(m: { velocity: Float32Array; position: Float32Array; numNodes: number; fixed: Uint8Array }): void {
-    const v = m.velocity;
-    const p = m.position;
-    const n = m.numNodes;
-    for (let i = 0; i < v.length; i++) v[i] *= FREE_VELOCITY_DAMP;
-
-    let cx = 0, cy = 0, cz = 0;
-    for (let i = 0; i < n; i++) { cx += p[3 * i]; cy += p[3 * i + 1]; cz += p[3 * i + 2]; }
-    cx /= n; cy /= n; cz /= n;
-    let mx = 0, my = 0, mz = 0, lx = 0, ly = 0, lz = 0, inertia = 0;
-    for (let i = 0; i < n; i++) {
-      const vx = v[3 * i], vy = v[3 * i + 1], vz = v[3 * i + 2];
-      mx += vx; my += vy; mz += vz;
-      const rx = p[3 * i] - cx, ry = p[3 * i + 1] - cy, rz = p[3 * i + 2] - cz;
-      lx += ry * vz - rz * vy; ly += rz * vx - rx * vz; lz += rx * vy - ry * vx;
-      inertia += rx * rx + ry * ry + rz * rz;
-    }
-    mx /= n; my /= n; mz /= n;
-    const inv = inertia > 1e-9 ? 1 / inertia : 0;
-    const wx = lx * inv, wy = ly * inv, wz = lz * inv;
-    for (let i = 0; i < n; i++) {
-      if (m.fixed[i]) { v[3 * i] = v[3 * i + 1] = v[3 * i + 2] = 0; continue; }
-      const rx = p[3 * i] - cx, ry = p[3 * i + 1] - cy, rz = p[3 * i + 2] - cz;
-      v[3 * i] -= mx + (wy * rz - wz * ry);
-      v[3 * i + 1] -= my + (wz * rx - wx * rz);
-      v[3 * i + 2] -= mz + (wx * ry - wy * rx);
-    }
   }
 
   private loop(): void {

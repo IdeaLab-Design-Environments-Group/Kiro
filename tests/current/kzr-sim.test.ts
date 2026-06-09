@@ -11,11 +11,11 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { buildScene } from "../src/sim/scene.js";
-import type { FoldFile } from "../src/model/fold-file.js";
+import { buildScene } from "../../src/sim/scene.js";
+import type { FoldFile } from "../../src/model/fold-file.js";
 
 function loadExample(name: string): FoldFile {
-  const url = new URL(`../public/examples/${name}`, import.meta.url);
+  const url = new URL(`../../public/examples/${name}`, import.meta.url);
   return JSON.parse(readFileSync(fileURLToPath(url), "utf8")) as FoldFile;
 }
 
@@ -62,9 +62,10 @@ describe("kirigamizer app sim path (src/sim via scene.buildScene)", () => {
   });
 
   it("folds a generic FKLD crease pattern (free path) without blowing up", () => {
-    const fold = loadExample("akde-circular.fkld");
+    const fold = loadExample("fold-upstream/diagonal-cp.fold");
     const built = buildScene(fold);
     expect(built).not.toBeNull();
+    expect(built!.mode).toBe("free");
     const { model, solver } = built!.scene;
     solver.solve(4000, 1);
     for (let i = 0; i < model.position.length; i++) {
