@@ -30,14 +30,28 @@ export class ViewerFrame {
     this.element.append(this.iframe);
 
     window.addEventListener("message", (e: MessageEvent) => {
-      if (e.data && e.data.type === "kirigamizer:viewer-ready") {
+      const msg = e.data;
+      if (!msg) return;
+      if (msg.type === "kirigamizer:viewer-ready") {
         this.ready = true;
         if (this.pending) {
           this.post(this.pending);
           this.pending = null;
         }
+      } else if (msg.type === "kirigamizer:viewer-loaded" && msg.fkld) {
+        // The viewer loaded a model by ANY path (its file picker, example dropdown, drag-drop, or
+        // our own show()). Record it so the 3D Sim folds exactly what is on screen.
+        const object = msg.fkld as FoldFile;
+        const name = (msg.name as string) ?? "viewer-model";
+        this.shown = { object, name };
+        this.loadedHandler(object, name);
       }
     });
+  }
+
+  /** Register a callback fired whenever the viewer's displayed model changes (any load path). */
+  onLoaded(handler: (object: FoldFile, name: string) => void): void {
+    this.loadedHandler = handler;
   }
 
   /** Show a FOLD/FKLD object in the viewer (queued until the viewer is ready). */

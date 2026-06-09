@@ -42,6 +42,11 @@ class ViewerFrameMock {
   current(): { object: FoldFile; name: string } | null {
     return this.shown;
   }
+
+  loadedHandler: ((object: FoldFile, name: string) => void) | null = null;
+  onLoaded(handler: (object: FoldFile, name: string) => void): void {
+    this.loadedHandler = handler;
+  }
 }
 
 class HeaderActionsMock {

@@ -41,6 +41,10 @@ export class AppController {
       return built ? { scene: built.scene, title: `${src.name} (${built.mode})` } : null;
     });
 
+    // The viewer can load models on its own (file picker, example dropdown, drag-drop); keep the
+    // 3D Sim button in step with whatever is actually on screen there.
+    this.viewer.onLoaded((object) => this.sim.setEnabled(canSimulate(object)));
+
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
     this.header.onCreatePyramid(() => this.createPyramid());
