@@ -170,6 +170,85 @@ export function makeGrid(nx = 4, ny = 4, cell = 25): TriMesh {
   return { vertices, faces };
 }
 
+/**
+ * Saddle roof: coarse hyperbolic paraboloid z = (x² − y²)/c over a square —
+ * every interior vertex has δ < 0 (M5 acceptance target).
+ */
+export function makeSaddleRoof(n = 4, size = 100, c = 100): TriMesh {
+  const vertices: Vec3[] = [];
+  for (let j = 0; j <= n; j++) {
+    for (let i = 0; i <= n; i++) {
+      const x = (i / n - 0.5) * size;
+      const y = (j / n - 0.5) * size;
+      vertices.push({ x, y, z: (x * x - y * y) / c });
+    }
+  }
+  const id = (i: number, j: number): number => j * (n + 1) + i;
+  const faces: [number, number, number][] = [];
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      faces.push([id(i, j), id(i + 1, j), id(i + 1, j + 1)]);
+      faces.push([id(i, j), id(i + 1, j + 1), id(i, j + 1)]);
+    }
+  }
+  return { vertices, faces };
+}
+
+/**
+ * Enneper minimal-surface patch (K < 0 everywhere):
+ *   x = u − u³/3 + uv²,  y = v − v³/3 + u²v,  z = u² − v²
+ * sampled on a coarse grid over [−r, r]², scaled to mm (M5 acceptance target).
+ */
+export function makeEnneper(n = 4, r = 0.8, scaleMm = 50): TriMesh {
+  const vertices: Vec3[] = [];
+  for (let j = 0; j <= n; j++) {
+    for (let i = 0; i <= n; i++) {
+      const u = (i / n - 0.5) * 2 * r;
+      const v = (j / n - 0.5) * 2 * r;
+      vertices.push({
+        x: scaleMm * (u - (u * u * u) / 3 + u * v * v),
+        y: scaleMm * (v - (v * v * v) / 3 + u * u * v),
+        z: scaleMm * (u * u - v * v),
+      });
+    }
+  }
+  const id = (i: number, j: number): number => j * (n + 1) + i;
+  const faces: [number, number, number][] = [];
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      faces.push([id(i, j), id(i + 1, j), id(i + 1, j + 1)]);
+      faces.push([id(i, j), id(i + 1, j + 1), id(i, j + 1)]);
+    }
+  }
+  return { vertices, faces };
+}
+
+/**
+ * Tent (prism roof): a grid folded along a raised middle ridge. Interior
+ * ridge vertices are intrinsically FLAT (a fold is an isometry → δ = 0), so
+ * the planner cuts nothing and they stay FREE in the sim — the fold must
+ * actually lift them. The e2e target that exercises real relaxation.
+ */
+export function makeTent(nx = 4, width = 100, depth = 50, height = 30): TriMesh {
+  const vertices: Vec3[] = [];
+  const ys = [0, depth / 2, depth];
+  const zs = [0, height, 0];
+  for (let j = 0; j < 3; j++) {
+    for (let i = 0; i <= nx; i++) {
+      vertices.push({ x: (i / nx) * width, y: ys[j], z: zs[j] });
+    }
+  }
+  const id = (i: number, j: number): number => j * (nx + 1) + i;
+  const faces: [number, number, number][] = [];
+  for (let j = 0; j < 2; j++) {
+    for (let i = 0; i < nx; i++) {
+      faces.push([id(i, j), id(i + 1, j), id(i + 1, j + 1)]);
+      faces.push([id(i, j), id(i + 1, j + 1), id(i, j + 1)]);
+    }
+  }
+  return { vertices, faces };
+}
+
 /** Serialize a TriMesh as minimal OBJ text (round-trip test helper). */
 export function toObj(mesh: TriMesh): string {
   const lines: string[] = [];

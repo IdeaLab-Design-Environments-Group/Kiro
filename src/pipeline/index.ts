@@ -13,3 +13,5 @@ export * from "./plan-cuts.js";
 export * from "./unfold.js";
 export * from "./route-seams.js";
 export * from "./emit.js";
+export * from "./verify.js";
+export * from "./kirigamize.js";

@@ -128,7 +128,15 @@ export interface Sheet {
   patchOfFace: number[];
 }
 
-/** Result of the simulator verification (M5, `verify.ts`). */
+/**
+ * Result of the simulator verification (M5, `verify.ts`).
+ *
+ * The driven forward process positions sheet-boundary vertices
+ * kinematically, so the verification leans on residuals the drive cannot
+ * fake: `meanStrain`/`maxStrain` (bar isometry oracle) and `creaseResidual`
+ * (measured θ from actual face normals vs goal dihedral), plus `dH` which is
+ * informative whenever free interior vertices exist (`freeVertices` > 0).
+ */
 export interface VerifyReport {
   /** Sampled symmetric Hausdorff distance, mm. */
   dH: number;
@@ -138,6 +146,10 @@ export interface VerifyReport {
   epsilon: number;
   meanStrain: number;
   maxStrain: number;
+  /** Mean |θ_measured − θ_target| over creases at the settled pose (rad). */
+  creaseResidual: number;
+  /** Number of non-driven sheet vertices (0 ⇒ dH is kinematically trivial). */
+  freeVertices: number;
   iterations: number;
   attempts: number;
   converged: boolean;

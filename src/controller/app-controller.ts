@@ -13,6 +13,9 @@ import { buildScene, canSimulate } from "../sim/scene.js";
 // Transferred AKDE creation pipeline: inputs → KirigamiState → FKLD crease+cut pattern.
 import { computeState, defaultInputs } from "@kirigami/model/geometry.js";
 import { buildFkldFile } from "@kirigami/model/fkld-export.js";
+// General mesh→pattern pipeline (M1–M5).
+import { kirigamizeText } from "../pipeline/kirigamize.js";
+import { PipelineError } from "../pipeline/types.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { MetadataPanel } from "../view/metadata-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
@@ -92,18 +95,38 @@ export class AppController {
     reader.readAsText(file);
   }
 
+  /**
+   * The general pipeline (M1–M5): condition → curvature → plan cuts →
+   * seamed unfold → pack/classify → emit FKLD → fold in the sim and verify
+   * d_H against the source mesh. FOLD/FKLD models pass through to the viewer.
+   */
   kirigamize(): void {
     const m = this.store.model;
     if (!m) return;
     if (m.kind === "fold") {
-      this.viewer.show(m.object, m.name); // passthrough stub
-      this.store.setStatus(`Showing "${m.name}" in the viewer (passthrough — conversion stub).`, "ok");
-    } else {
+      this.viewer.show(m.object, m.name); // already a pattern — just show it
+      this.store.setStatus(`Showing "${m.name}" in the viewer (already a FOLD/FKLD pattern).`, "ok");
+      return;
+    }
+    this.store.setStatus(`Kirigamizing ${m.name}… (plan cuts → unfold → emit → verify)`, "");
+    try {
+      const result = kirigamizeText(m.text, m.ext, { verify: true });
+      const name = m.name.replace(/\.(obj|stl)$/i, "") + ".fkld";
+      this.applyFold(result.fkld, name);
+      this.viewer.show(result.fkld, name);
+      const r = result.report;
+      const cuts = result.plan.cutEdges.length + result.unfold.reliefEdges.length;
+      const verdict = r
+        ? `${r.converged ? "verified" : "NOT verified"}: d_H = ${r.dH.toFixed(2)} mm (ε = ${r.epsilon.toFixed(2)} mm), ` +
+          `mean strain ${(100 * r.meanStrain).toFixed(1)}%, ${r.attempts} attempt(s)`
+        : "unverified";
       this.store.setStatus(
-        `Kirigamizer conversion for ${m.name} is not implemented yet — ` +
-          `this is where curvature → molecule/cut placement → unfold will run.`,
-        "",
+        `Kirigamized "${m.name}" → ${cuts} cuts, ${result.sheet.faces.length} faces — ${verdict}.`,
+        r && !r.converged ? "bad" : "ok",
       );
+    } catch (err) {
+      const msg = err instanceof PipelineError ? err.message : `kirigamize failed: ${(err as Error).message}`;
+      this.store.setStatus(msg, "bad");
     }
   }
 
@@ -158,7 +181,7 @@ export class AppController {
   private applyMesh(text: string, name: string, ext: "obj" | "stl"): void {
     this.store.update({
       model: { kind: "mesh", name, ext, text },
-      status: { msg: `Loaded ${ext.toUpperCase()} mesh "${name}". Conversion pipeline is a stub.`, kind: "" },
+      status: { msg: `Loaded ${ext.toUpperCase()} mesh "${name}". Press Kirigamize ▶ to convert.`, kind: "" },
     });
   }
 }

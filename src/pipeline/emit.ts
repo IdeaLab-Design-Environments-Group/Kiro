@@ -11,10 +11,21 @@
  *
  * The guided-fold contract (M5's linchpin): the file carries
  *   file_frames: [{ frame_classes: ["foldedForm"], vertices_coords: goal3D }]
- *   fkld:vertices_driven[i] = 1 for every sheet-boundary vertex
+ *   fkld:vertices_driven[i] = 1 for every sheet-boundary vertex (lips + ∂Q)
  * with goal3D[i] = Q.vertices[origVertex[i]] (mm) — exactly what
- * src/sim/fold-adapter.ts#applyGuidedFold consumes. Sealed lips get
- * identical goals, which is what closes them when the boundary is driven.
+ * src/sim/fold-adapter.ts#applyGuidedFold consumes; this is the DETC
+ * driven-boundary forward process from the algorithm spec.
+ *
+ * Verification semantics (honest scope): on coarse targets most sheet
+ * vertices sit on a lip or ∂Q, so the driven fold positions them
+ * kinematically and d_H alone would be trivial. Stage-5 therefore verifies
+ * through residuals the drive cannot fake: bar STRAIN at the settled pose
+ * (the isometry oracle — a non-isometric unfold/packing strains bars) and
+ * the CREASE-ANGLE residual (measured θ from actual face normals vs the
+ * goal dihedral — catches M/V misassignment), plus d_H over any free
+ * interior vertices. (A free-lip mechanical fold was tried and reverted:
+ * without collision handling the explicit solver settles in frustrated
+ * mirror equilibria — future work.)
  *
  * Tuck annotation (metadata-only, honest scope): tucked δ>0 vertices get
  * Tachi molecule parameters θ = δ(v)/N and w = 2·s̄·sin(θ/2) on their
@@ -102,6 +113,9 @@ export function emitFkld(sheet: Sheet, opts: EmitOptions): FoldFile {
     const p = target.vertices[src];
     return [p.x, p.y, p.z];
   });
+  // Every sheet-boundary vertex (lips + ∂Q) is driven — the DETC forward
+  // process. Interior vertices stay free and relax (see module doc for why
+  // verification leans on strain + crease residuals rather than d_H alone).
   const driven = new Array<number>(nV).fill(0);
   for (let e = 0; e < nE; e++) {
     if (sheet.assignment[e] === "B" || sheet.assignment[e] === "C") {

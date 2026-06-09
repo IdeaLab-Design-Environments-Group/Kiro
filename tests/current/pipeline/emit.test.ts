@@ -80,15 +80,16 @@ describe("emitFkld — cube", () => {
     for (const g of goal) for (const c of g) expect(Math.abs(c)).toBeCloseTo(50, 9);
 
     const driven = fkld[DRIVEN_KEY] as number[];
-    // driven = exactly the sheet-boundary vertices (lip/B edge endpoints)
-    const boundary = new Set<number>();
+    // driven = every sheet-boundary vertex (lips + ∂Q) — the DETC forward
+    // process; verification leans on strain + crease residuals (see emit.ts).
+    const expected = new Set<number>();
     sheet.edges.forEach((e, i) => {
       if (sheet.assignment[i] === "C" || sheet.assignment[i] === "B") {
-        boundary.add(e.a);
-        boundary.add(e.b);
+        expected.add(e.a);
+        expected.add(e.b);
       }
     });
-    driven.forEach((d, v) => expect(d).toBe(boundary.has(v) ? 1 : 0));
+    driven.forEach((d, v) => expect(d).toBe(expected.has(v) ? 1 : 0));
     expect(driven.some((d) => d === 1)).toBe(true);
   });
 

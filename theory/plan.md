@@ -1,10 +1,22 @@
 # Kirigamizer — build plan (general cut + fold for any surface)
 
-**Status:** Foundation in place. AKDE's full **creation** pipeline and **sim** are
-transferred into this repo (`kirigami/`, `fkld/`), the simulator is restored to
-AKDE-exact behavior, and the shell can already *create* an AKDE pyramid and fold
-it. The **general** model→pattern conversion (the actual Kirigamizer) is the work
-this plan lays out.
+**Status:** **M0–M5 complete (2026-06-10).** The general model→pattern pipeline is
+implemented under `src/pipeline/` and wired into `AppController.kirigamize()`:
+OBJ/ASCII-STL → condition → angle defects → MST cut forest (+ wedge rule) →
+seamed unfold (relief loop) → shelf-pack + classify → FKLD emit (goal frame +
+driven flags) → **equilibrium verification** in the AKDE solver (d_H, bar
+strain, crease residual). Acceptance targets green: cube, saddle roof, Enneper
+patch, tent (free-vertex relaxation), octahedron tuck-all reduction/deferral.
+M6 (fabrication export, STEP) remains deferred.
+
+**Verification note (deviation from §3 Stage 5 as originally sketched):** v1
+verifies that the folded goal pose is a *stable equilibrium* of the emitted
+pattern rather than simulating the fold path from flat. With the scaffold
+driven, the bar-and-hinge crease reactions push free fold-line nodes toward the
+mirror side (wings pinned ⇒ reactions dominate), so path-folding needs collision
+handling / a constraint solver — future work. Crease targets for guided folds
+are now derived from the goal pose itself in `src/sim/fold-adapter.ts`
+(sign-robust per-crease frames).
 
 **Authority:** `kirigamizer_algorithms.tex` (Emre Dayangac) — the algorithm
 proposal; `origamizer_algorithms.tex` — the reused Origamizer stages. AKDE is the
@@ -80,28 +92,36 @@ Each milestone is shippable and testable on its own. ✅ = done, ▶ = next, ☐
 
 - **M0 — Foundation (✅).** Transfer AKDE creation + sim + FKLD; fix the sim to
   AKDE-exact; wire Create-pyramid; green build + tests.
-- **M1 — Mesh substrate (▶).** `mesh.ts` half-edge + adjacency; OBJ/PLY/OFF import
-  (`import.ts`); conditioning (weld, manifold repair, decimate) (`conditioning.ts`).
-  STEP import is later (M6) — start with meshes already in the repo's `fold-upstream`
-  examples and OBJ test fixtures. *Test:* round-trip a cube/icosphere; angle defects
-  sum to $2\pi\chi$.
-- **M2 — Curvature & cut planning (☐).** `curvature.ts` (per-vertex $\delta$,
-  classify ±/flat/boundary); `plan-cuts.ts` necessity + connection (cut-tree),
-  routing v1 (shortest paths along edges, visibility weight $\lambda$); dart-vs-tuck
-  decision. *Test:* a saddle gets exactly the cuts Gauss–Bonnet forces; a convex
-  polytope reduces to Origamizer ($\mathcal{C}=\varnothing$ when all tucked).
-- **M3 — Seamed unfold (☐).** `unfold.ts` BFS vertex-unfolding per patch + overlap
-  relief cuts. *Test:* each patch flattens isometrically; no self-overlap; total cut
-  length ≥ curvature minimum.
-- **M4 — Emit FKLD (☐).** `route-seams.ts` (pack + seams/tabs) + `emit.ts` (creases,
-  cut subtypes, local tucks) → FKLD via `fkld/bridge`. *Test:* output loads in the
-  viewer; FKLD validates; cut subtypes (`major/minor/seam/dart/...`) correct.
-- **M5 — Verify loop (☐).** `verify.ts`: fold the emitted FKLD with `src/sim`, measure
-  $d_H$ to the goal, refine. Wire `AppController.kirigamize()` for `.obj`/`.stl` to run
-  M1–M5. *Test:* a coarse target folds to within ε (e.g. Enneper patch, saddle roof).
-- **M6 — Fabrication & STEP (☐).** STEP/B-rep import (feature edges, units); SVG/DXF
-  export with cut/score/engrave layers (reuse `kirigami/model/svg-export`); kerf,
-  tabs, multi-sheet nesting.
+- **M1 — Mesh substrate (✅).** `mesh.ts` ordered one-ring fan topology (half-edge
+  rejected as overkill); OBJ/ASCII-STL import (`import.ts`, binary STL rejected);
+  conditioning passes weld/orient/degenerate + genus-0 gate (`conditioning.ts`).
+  *Tests:* cube/icosphere round-trip; $\Sigma\delta = 2\pi\chi$ within 1e-9.
+- **M2 — Curvature & cut planning (✅).** `curvature.ts` ($\delta$, classes, signed
+  dihedral M+); `plan-cuts.ts` necessity + MST-of-metric-closure connection
+  (boundary as pseudo-terminal), forest pruning, **wedge rule** for $\delta<0$
+  (cut-degree ≥ 2, every wedge < 2π); dart-vs-tuck strategy dial. *Tests:* saddle
+  gets exactly the forced cuts; octahedron tuck-all reduces to $\mathcal{C}=\varnothing$.
+- **M3 — Seamed unfold (✅).** `unfold.ts` wedge splitting (slit endpoints don't
+  split), BFS law-of-cosines isometric layout, developability/isometry audits,
+  shrink-SAT overlap predicate, bounded relief loop (RELIEF_MAX=64). Cutting may
+  legitimately disconnect (saddle fan → 2 patches); result is globally indexed
+  with per-face patch labels. *Tests:* cube net golden (1e-9 isometry), apex dart
+  gap = $\delta$, icosphere relief termination.
+- **M4 — Emit FKLD (✅).** `route-seams.ts` (shelf packing + M/V/F/B/C + cut
+  subtypes minor/dart/seam) + `emit.ts` (builder over fkld KEYS registry; molecule
+  tuck annotation θ=δ/N, w=2s̄·sin(θ/2); foldedForm goal frame +
+  `fkld:vertices_driven`; self-validation). *Tests:* io round-trip, buildScene
+  loadability, Σδ=4π through provenance.
+- **M5 — Verify loop (✅).** `verify.ts` (sampled symmetric Hausdorff, bar strain,
+  crease residual; **equilibrium verification** — see status note) + `kirigamize.ts`
+  facade (3-attempt optimize schedule: re-plan with worst-vertex terminal, then 3×
+  iterations) wired into `AppController.kirigamize()`. *Tests:* e2e cube / saddle
+  roof / Enneper / tent (free-vertex relaxation) all converge; negative test proves
+  the oracle rejects a tampered goal.
+- **M6 — Fabrication & STEP (☐ deferred).** STEP/B-rep import (feature edges, units);
+  SVG/DXF export with cut/score/engrave layers (reuse `kirigami/model/svg-export`);
+  kerf, tabs, multi-sheet nesting. Also future: free-lip fold-path verification
+  (needs collision handling), sealed gussets, Voronoi tuck crease generation.
 
 ---
 

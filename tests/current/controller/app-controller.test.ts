@@ -161,20 +161,51 @@ describe("controller/app-controller", () => {
 
     expect(viewer.showCalls).toEqual([{ object: fold, name: "sample.fkld" }]);
     expect(convert.statusCalls.at(-1)).toEqual({
-      msg: 'Showing "sample.fkld" in the viewer (passthrough — conversion stub).',
+      msg: 'Showing "sample.fkld" in the viewer (already a FOLD/FKLD pattern).',
       kind: "ok",
     });
   });
 
-  it("reports the mesh conversion stub for non-fold models", () => {
+  it("kirigamizes a mesh model through the full M1–M5 pipeline", { timeout: 120_000 }, () => {
+    const { controller, store, viewer, convert } = setup();
+    // open 4-gon pyramid OBJ: apex + 4 base corners, lateral faces only
+    const obj = [
+      "v 0 0 30",
+      "v 35.36 0 0",
+      "v 0 35.36 0",
+      "v -35.36 0 0",
+      "v 0 -35.36 0",
+      "f 1 2 3",
+      "f 1 3 4",
+      "f 1 4 5",
+      "f 1 5 2",
+    ].join("\n");
+    store.update({ model: { kind: "mesh", name: "pyramid.obj", ext: "obj", text: obj } });
+
+    controller.kirigamize();
+
+    const m = store.model;
+    expect(m?.kind).toBe("fold");
+    if (m?.kind === "fold") {
+      expect(m.name).toBe("pyramid.fkld");
+      expect(Object.keys(m.object).some((k) => k.startsWith("fkld:"))).toBe(true);
+    }
+    expect(viewer.showCalls.at(-1)?.name).toBe("pyramid.fkld");
+    const status = convert.statusCalls.at(-1);
+    expect(status?.msg).toContain("d_H");
+    expect(status?.msg).toContain("Kirigamized");
+  });
+
+  it("reports pipeline errors for unusable meshes", () => {
     const { controller, store, convert } = setup();
     store.update({
-      model: { kind: "mesh", name: "shape.obj", ext: "obj", text: "v 0 0 0" },
+      model: { kind: "mesh", name: "broken.obj", ext: "obj", text: "v 0 0 0" },
     });
 
     controller.kirigamize();
 
-    expect(convert.statusCalls.at(-1)?.msg).toContain("conversion for shape.obj is not implemented yet");
+    expect(convert.statusCalls.at(-1)?.kind).toBe("bad");
+    expect(convert.statusCalls.at(-1)?.msg).toMatch(/import|no vertices/);
   });
 
   it("loads the bundled sample on fetch success and announces it", async () => {

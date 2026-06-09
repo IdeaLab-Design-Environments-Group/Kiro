@@ -14,7 +14,7 @@ import type { FoldFile } from "../model/fold-file.js";
 import { type Vec3, vec3 } from "./vec3.js";
 import { type EdgeAssignment, foldNetFromMesh } from "./foldnet.js";
 import { type BarHingeModel, buildModel, DEFAULT_PARAMS } from "./model.js";
-import { FoldSolver } from "./solver.js";
+import { FoldSolver, measureTheta } from "./solver.js";
 import type { FoldScene } from "./build.js";
 
 export type { FoldScene };
@@ -125,15 +125,33 @@ export function buildSceneFromFold(fold: FoldFile): FoldScene {
   // free fold driven only by crease targets.
   const guided = applyGuidedFold(fold, model, pts.length, cx, cy, cz, scale);
 
-  // Crease targets: honour an explicit edges_foldAngle when present; else keep buildModel's
-  // AKDE-convention defaults (M:+, V:−) for the guided fold, or the free-fold defaults
-  // otherwise. (Do NOT clobber the correct signs with the backwards free-fold defaults when
-  // the boundary is guided — that frustration is a jitter source.)
-  for (let i = 0; i < model.creases.count; i++) {
-    const key = ekey(model.creases.n3[i], model.creases.n4[i]);
-    const t = explicitTarget.get(key);
-    if (t !== undefined) model.creases.targetTheta[i] = t;
-    else if (!guided) model.creases.targetTheta[i] = clampFold(defaultTarget(assignOf.get(key) ?? "F"));
+  // Crease targets.
+  //
+  // Guided: derive every crease's design angle from the GOAL POSE itself
+  // (DETC forward process — M0 defines the targets). This is sign-robust: a
+  // file's edges_foldAngle sign convention cannot be trusted to match the
+  // model's internal per-crease frame (face1/face2 and n3→n4 ordering are
+  // buildModel's choice), and a single flipped crease folds a limb to the
+  // mirror side. Measuring θ at the goal yields the exact angle in the
+  // model's own frame; a file with consistent signs gets identical values.
+  //
+  // Free fold: honour an explicit edges_foldAngle when present, else the
+  // AKDE-convention defaults (M:+, V:−).
+  if (guided) {
+    const flat = model.position.slice();
+    model.position.set(model.goal);
+    for (let i = 0; i < model.creases.count; i++) {
+      model.creases.targetTheta[i] = clampFold(
+        measureTheta(model, model.creases.face1[i], model.creases.face2[i], model.creases.n3[i], model.creases.n4[i]),
+      );
+    }
+    model.position.set(flat);
+  } else {
+    for (let i = 0; i < model.creases.count; i++) {
+      const key = ekey(model.creases.n3[i], model.creases.n4[i]);
+      const t = explicitTarget.get(key);
+      model.creases.targetTheta[i] = t !== undefined ? t : clampFold(defaultTarget(assignOf.get(key) ?? "F"));
+    }
   }
 
   if (!guided) {
