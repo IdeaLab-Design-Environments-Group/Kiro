@@ -1,21 +1,20 @@
 /**
  * **Controller** — the only place that knows about *both* the Model and the
- * Views. It (1) translates view intents (file chosen, kirigamize, load sample)
- * into Model updates, performing file IO/parsing along the way, and (2)
+ * Views. It (1) translates view intents (file chosen, kirigamize, create
+ * pyramid, load sample) into service calls + Model updates, and (2)
  * subscribes to the Model and pushes the new state into every View. Views and
- * the store never reference each other directly.
+ * the store never reference each other directly; the use-case logic itself
+ * lives in `src/services/` so new features land there, not here.
  */
 import { type AppState, AppStore } from "../model/app-store.js";
 import { deriveFacts } from "../model/derive-facts.js";
-import { type FoldFile, isFkld } from "../model/fold-file.js";
+import { type FoldFile, type LoadedModel } from "../model/fold-file.js";
 import { summarizeFkldForDisplay } from "../model/fkld-metadata.js";
-import { buildScene, canSimulate } from "../sim/index.js";
-// Transferred AKDE creation pipeline: inputs → KirigamiState → FKLD crease+cut pattern.
-import { computeState, defaultInputs } from "@kirigami/model/geometry.js";
-import { buildFkldFile } from "@kirigami/model/fkld-export.js";
-// General mesh→pattern pipeline (M1–M5).
-import { kirigamizeText } from "../pipeline/kirigamize.js";
+import { canSimulate } from "../sim/index.js";
 import { statusFromError } from "../core/errors.js";
+import { loadedStatus, readModelFile, fetchSample } from "../services/model-loader.js";
+import { kirigamizeMesh, createAkdePyramid } from "../services/pattern-service.js";
+import { resolveSimScene } from "../services/sim-scene-service.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { MetadataPanel } from "../view/metadata-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
@@ -36,13 +35,7 @@ export class AppController {
   ) {
     // 3D Sim folds exactly what the VIEWER is showing (fall back to the loaded model). This keeps
     // "what you see is what gets simulated" true even when the viewer and the convert panel differ.
-    this.sim.setProvider(() => {
-      const shown = this.viewer.current();
-      const src = shown ?? (this.store.model?.kind === "fold" ? this.store.model : null);
-      if (!src) return null;
-      const built = buildScene(src.object);
-      return built ? { scene: built.scene, title: `${src.name} — ${built.sim} sim (${built.mode})` } : null;
-    });
+    this.sim.setProvider(() => resolveSimScene(this.store.model, this.viewer.current()));
 
     // The viewer can load models on its own (file picker, example dropdown, drag-drop); keep the
     // 3D Sim button in step with whatever is actually on screen there.
@@ -68,31 +61,19 @@ export class AppController {
     this.sim.setEnabled(!!m && m.kind === "fold" && canSimulate(m.object));
   }
 
-  // ---- intents ------------------------------------------------------------
+  // ---- intents (each: a service call + a store update) ---------------------
 
   loadFromFile(file: File): void {
-    const name = file.name;
-    const ext = (name.split(".").pop() ?? "").toLowerCase();
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result);
-      if (ext === "fold" || ext === "fkld" || ext === "json") {
-        try {
-          this.applyFold(JSON.parse(text) as FoldFile, name);
-        } catch (err) {
-          this.store.update({
-            model: null,
-            status: statusFromError(err, "parse", `Parse error in ${name}`),
-          });
-        }
-      } else if (ext === "obj" || ext === "stl") {
-        this.applyMesh(text, name, ext);
-      } else {
-        this.store.setStatus(`Unsupported file type: .${ext}`, "bad");
-      }
-    };
-    reader.onerror = () => this.store.setStatus(`Could not read ${name}.`, "bad");
-    reader.readAsText(file);
+    readModelFile(
+      file,
+      (model) => this.apply(model),
+      (err) => {
+        // Parse failures invalidate the current model; IO failures (unsupported
+        // type, unreadable file) leave it untouched — same behavior as before.
+        if (err.domain === "parse") this.store.update({ model: null, status: { msg: err.message, kind: "bad" } });
+        else this.store.setStatus(err.message, "bad");
+      },
+    );
   }
 
   /**
@@ -110,20 +91,9 @@ export class AppController {
     }
     this.store.setStatus(`Kirigamizing ${m.name}… (plan cuts → unfold → emit → verify)`, "");
     try {
-      const result = kirigamizeText(m.text, m.ext, { verify: true });
-      const name = m.name.replace(/\.(obj|stl)$/i, "") + ".fkld";
-      this.applyFold(result.fkld, name);
-      this.viewer.show(result.fkld, name);
-      const r = result.report;
-      const cuts = result.plan.cutEdges.length + result.unfold.reliefEdges.length;
-      const verdict = r
-        ? `${r.converged ? "verified" : "NOT verified"}: d_H = ${r.dH.toFixed(2)} mm (ε = ${r.epsilon.toFixed(2)} mm), ` +
-          `mean strain ${(100 * r.meanStrain).toFixed(1)}%, ${r.attempts} attempt(s)`
-        : "unverified";
-      this.store.setStatus(
-        `Kirigamized "${m.name}" → ${cuts} cuts, ${result.sheet.faces.length} faces — ${verdict}.`,
-        r && !r.converged ? "bad" : "ok",
-      );
+      const outcome = kirigamizeMesh(m.text, m.ext, m.name);
+      this.showPattern(outcome.fkld, outcome.name);
+      this.store.setStatus(outcome.summary, outcome.ok ? "ok" : "bad");
     } catch (err) {
       // PipelineError passes through with its "<stage>: <message>" text;
       // anything else is wrapped with the kirigamize prefix.
@@ -132,36 +102,23 @@ export class AppController {
     }
   }
 
-  /**
-   * Generate an AKDE uniform-molecule pyramid via the **transferred creation
-   * pipeline** (`@kirigami/model`): default inputs → KirigamiState → FKLD
-   * crease+cut pattern. The result loads exactly like an imported FKLD — shown
-   * in the viewer and ready for the guided 3D Sim (its `frame_title` carries the
-   * N/L/H/T the sim recovers). This is the "creation" half of AKDE running
-   * inside the Kirigamizer shell, ahead of the general mesh→pattern pipeline.
-   */
+  /** Generate an AKDE pyramid via the transferred creation pipeline (see pattern-service). */
   createPyramid(): void {
-    const fkld = buildFkldFile(computeState(defaultInputs())) as FoldFile | null;
-    if (!fkld) {
-      this.store.setStatus("Could not create the pyramid pattern.", "bad");
-      return;
+    try {
+      const outcome = createAkdePyramid();
+      this.showPattern(outcome.fkld, outcome.name);
+      this.store.setStatus(outcome.summary, "ok");
+    } catch (err) {
+      const { msg, kind } = statusFromError(err, "create");
+      this.store.setStatus(msg, kind);
     }
-    const name = "akde-pyramid.fkld";
-    this.applyFold(fkld, name);
-    this.viewer.show(fkld, name);
-    this.store.setStatus(
-      `Created AKDE pyramid via the transferred creation pipeline. Open 3D Sim to fold it.`,
-      "ok",
-    );
   }
 
   async loadSample(announce = true): Promise<void> {
     try {
-      const resp = await fetch(SAMPLE_URL);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const obj = JSON.parse(await resp.text()) as FoldFile;
-      this.applyFold(obj, SAMPLE_NAME);
-      this.viewer.show(obj, SAMPLE_NAME);
+      const model = await fetchSample(SAMPLE_URL, SAMPLE_NAME);
+      this.apply(model);
+      if (model.kind === "fold") this.viewer.show(model.object, model.name);
       if (announce) this.store.setStatus("Loaded bundled sample into the viewer.", "ok");
     } catch {
       if (announce)
@@ -171,19 +128,14 @@ export class AppController {
 
   // ---- model transitions --------------------------------------------------
 
-  private applyFold(obj: FoldFile, name: string): void {
-    const kind = isFkld(obj) ? "FKLD" : "FOLD";
-    const sim = canSimulate(obj) ? " 3D Sim ready." : "";
-    this.store.update({
-      model: { kind: "fold", name, object: obj },
-      status: { msg: `Loaded ${kind} model "${name}". Ready to Kirigamize.${sim}`, kind: "ok" },
-    });
+  /** Commit a loaded model to the store with its standard status line. */
+  private apply(model: LoadedModel): void {
+    this.store.update({ model, status: loadedStatus(model) });
   }
 
-  private applyMesh(text: string, name: string, ext: "obj" | "stl"): void {
-    this.store.update({
-      model: { kind: "mesh", name, ext, text },
-      status: { msg: `Loaded ${ext.toUpperCase()} mesh "${name}". Press Kirigamize ▶ to convert.`, kind: "" },
-    });
+  /** Commit a generated pattern and show it in the viewer. */
+  private showPattern(fkld: FoldFile, name: string): void {
+    this.apply({ kind: "fold", name, object: fkld });
+    this.viewer.show(fkld, name);
   }
 }
