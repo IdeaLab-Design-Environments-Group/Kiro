@@ -52,6 +52,8 @@ rg "../view|./view" src/model src/pipeline src/sim
 Some simulation GPU files legitimately import Three.js infrastructure. DOM
 imports should still stay out of `src/sim/`.
 
+See `docs/import-boundaries.md` for the full dependency rulebook.
+
 ## Simulation Checks
 
 For fold-direction bugs:
@@ -107,4 +109,3 @@ When adding or moving major code:
 - Update `docs/pipeline.md` for conversion-stage changes.
 - Update `docs/simulation.md` for solver or scene-building changes.
 - Update `docs/development.md` if commands or workflow expectations change.
-

@@ -41,7 +41,7 @@ export class AppController {
       const src = shown ?? (this.store.model?.kind === "fold" ? this.store.model : null);
       if (!src) return null;
       const built = buildScene(src.object);
-      return built ? { scene: built.scene, title: `${src.name} (${built.mode})` } : null;
+      return built ? { scene: built.scene, title: `${src.name} — ${built.sim} sim (${built.mode})` } : null;
     });
 
     // The viewer can load models on its own (file picker, example dropdown, drag-drop); keep the

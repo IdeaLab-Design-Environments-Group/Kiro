@@ -3,7 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldScene } from "../sim/index.js";
 import type { FoldSolver } from "../sim/solver.js";
 import { GpuFoldSolver } from "../sim/gpu/gpu-solver.js";
-import { dampVelocity, kineticDamp, removeRigidBodyMotion } from "../sim/stabilize.js";
+import { kineticDamp, removeRigidBodyMotion } from "../sim/stabilize.js";
 
 /**
  * Three.js viewport for the forward fold — ported from AKDE's `sim-canvas.ts`.
@@ -30,9 +30,8 @@ const COLOR_CUT = 0x000000;
 const STEPS_PER_FRAME = 40;
 /** Guided mode: per-frame easing of the applied fold toward the slider target (AKDE behaviour). */
 const FOLD_EASE = 0.05;
-/** Free mode: gentler per-step easing + damping + rigid-removal + freeze (see header). */
+/** Free mode: gentler per-step easing + kinetic quench + rigid-removal + freeze (see header). */
 const FREE_PER_STEP_EASE = 0.014;
-const FREE_VELOCITY_DAMP = 0.9;
 const FREE_FOLD_REACHED_EPS = 1e-3;
 const FREE_RELAX_FRAMES = 72;
 /** Guided mode: kinetic-damped relax frames after full fold before freezing the pose. */
@@ -243,7 +242,9 @@ export class SimCanvas {
     }
   }
 
-  /** Free mesh: quasi-static per-step easing + velocity damping + rigid-removal, then freeze. */
+  /** Free mesh (Neil's normal origami fold): quasi-static easing + kinetic quench + rigid-removal,
+   *  then freeze. The quench descends to the fold's equilibrium (no limit-cycle jitter that plain
+   *  viscous damping leaves behind); rigid-removal keeps an un-pinned mesh from drifting off-camera. */
   private advanceFree(): void {
     if (this.frozen || !this.cpu) return; // frozen: hold the pose, orbit only
     const m = this.fold!.model;
@@ -251,8 +252,8 @@ export class SimCanvas {
       this.foldPercent += (this.targetFold - this.foldPercent) * FREE_PER_STEP_EASE;
       this.cpu.foldPercent = this.foldPercent;
       this.cpu.step();
-      dampVelocity(m, FREE_VELOCITY_DAMP); // viscous bleed, then remove the rigid component
-      removeRigidBodyMotion(m);
+      this.prevKE = kineticDamp(m, this.prevKE); // Otter quench → settles to equilibrium
+      removeRigidBodyMotion(m); // remove the global drift the quench leaves behind
     }
     this.flushGeometry();
     if (Math.abs(this.targetFold - this.foldPercent) < FREE_FOLD_REACHED_EPS) {

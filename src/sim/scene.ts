@@ -1,20 +1,32 @@
 /**
- * Picks the fold scene for a loaded model — always folding the model's **own loaded geometry** so
- * the 3D Sim shows exactly what the viewer shows:
- *  - foldable file with embedded guidance (a `foldedForm` goal frame + `fkld:vertices_driven`, e.g.
- *    `akde-hex`): guided fold on the real geometry (crisp, what-you-see);
- *  - foldable AKDE pyramid with no embedded guidance whose geometry matches its recomputed net
- *    (e.g. `akde-square-pyramid`, or a freshly created pyramid): the guided pipeline on that same
- *    geometry, so it still closes crisply;
- *  - any other foldable crease pattern: the generic crease-target free fold on its real geometry;
- *  - a non-foldable file we can still recognize as a pyramid: recompute as a last resort.
+ * Picks the fold scene for a loaded model, routing by **file type** and always folding the
+ * model's own loaded geometry (the 3D Sim shows exactly what the viewer shows):
+ *
+ *  - **FKLD → the kirigami sim.** Cuts are first-class: cut edges open (no crease across them) and
+ *    the fold is guided to a goal mesh when the file carries one (`foldedForm` frame +
+ *    `fkld:vertices_driven`, e.g. `akde-hex`), or via the AKDE pyramid pipeline on matching
+ *    geometry (`akde-square-pyramid`, freshly created pyramids), else a cut-aware free fold.
+ *  - **plain FOLD → Neil's normal origami sim.** The standard Gershenfeld forward fold: ramp the
+ *    crease targets (from `edges_foldAngle`, else M/V defaults) flat → folded, free (no goal-mesh
+ *    guidance, no pyramid recompute) — origami, not kirigami.
+ *  - a non-foldable file we can still recognize as a pyramid spec: recompute as a last resort.
  */
-import type { FoldFile } from "../model/fold-file.js";
+import { type FoldFile, isFkld } from "../model/fold-file.js";
 import type { KirigamiInputs } from "../model/types.js";
 import { computeState } from "../model/geometry.js";
 import { buildFoldScene } from "./build.js";
 import { buildSceneFromFold, isFoldable } from "./fold-adapter.js";
 import type { FoldScene } from "./build.js";
+
+/** Which simulator handled the model: `kirigami` (cut-aware / guided) or `origami` (Neil's free fold). */
+export type SimKind = "kirigami" | "origami";
+/** Drive style: `guided` (boundary driven to a goal mesh) or `free` (crease-target forward fold). */
+export type FoldMode = "guided" | "free";
+export interface BuiltScene {
+  scene: FoldScene;
+  mode: FoldMode;
+  sim: SimKind;
+}
 
 const num = (re: RegExp, s: string): number | null => {
   const m = re.exec(s);
@@ -43,30 +55,34 @@ const anyDriven = (driven: Uint8Array): boolean => {
   return false;
 };
 
-/** Build the best available fold scene, plus a human label of the path taken. */
-export function buildScene(fold: FoldFile): { scene: FoldScene; mode: "guided" | "free" } | null {
+/** Build the fold scene for a model, routed by file type (FKLD = kirigami, FOLD = origami). */
+export function buildScene(fold: FoldFile): BuiltScene | null {
   if (isFoldable(fold)) {
-    // Fold the ACTUAL loaded geometry. If the file ships a folded goal frame, it folds guided.
-    const scene = buildSceneFromFold(fold);
-    if (anyDriven(scene.model.driven)) return { scene, mode: "guided" };
+    const scene = buildSceneFromFold(fold); // folds the loaded geometry (cut-aware; guided iff a goal frame is present)
 
-    // Foldable but no embedded guidance: a recognizable AKDE pyramid whose geometry matches its
-    // recomputed net folds crisply via the guided pipeline on that same geometry. (createPyramid
-    // and akde-square-pyramid have no folded frame; this keeps them crisp without ignoring the
-    // viewer's model — the recomputed net is identical to the loaded one.)
-    const inputs = pyramidInputsFromFold(fold);
-    if (inputs) {
-      const guided = buildFoldScene(computeState(inputs));
-      if (guided.net.vertices.length === (fold.vertices_coords?.length ?? -1)) {
-        return { scene: guided, mode: "guided" };
+    if (isFkld(fold)) {
+      // KIRIGAMI SIM — cuts first-class, guided to a goal mesh when available.
+      if (anyDriven(scene.model.driven)) return { scene, mode: "guided", sim: "kirigami" };
+      // No embedded guidance: an AKDE pyramid whose geometry matches its recomputed net folds
+      // crisply via the guided pipeline on that same geometry (no folded frame needed).
+      const inputs = pyramidInputsFromFold(fold);
+      if (inputs) {
+        const guided = buildFoldScene(computeState(inputs));
+        if (guided.net.vertices.length === (fold.vertices_coords?.length ?? -1)) {
+          return { scene: guided, mode: "guided", sim: "kirigami" };
+        }
       }
+      // Cut-aware free fold of the loaded kirigami geometry.
+      return { scene, mode: "free", sim: "kirigami" };
     }
-    // Anything else: free-fold the loaded geometry as-is.
-    return { scene, mode: "free" };
+
+    // NEIL'S NORMAL ORIGAMI SIM — plain FOLD: standard free crease-target forward fold. (Plain FOLD
+    // carries no `fkld:vertices_driven`, so buildSceneFromFold never guided it; this is always free.)
+    return { scene, mode: anyDriven(scene.model.driven) ? "guided" : "free", sim: "origami" };
   }
 
-  // Not directly foldable, but recognizable as a pyramid → recompute as a last resort.
+  // Not directly foldable, but recognizable as a pyramid spec → kirigami recompute as a last resort.
   const inputs = pyramidInputsFromFold(fold);
-  if (inputs) return { scene: buildFoldScene(computeState(inputs)), mode: "guided" };
+  if (inputs) return { scene: buildFoldScene(computeState(inputs)), mode: "guided", sim: "kirigami" };
   return null;
 }

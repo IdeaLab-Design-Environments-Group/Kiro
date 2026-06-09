@@ -55,6 +55,20 @@ const clampFold = (t: number): number => Math.max(-MAX_FOLD, Math.min(MAX_FOLD, 
 
 const ekey = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_${a}`);
 
+/** Mean |l/l₀ − 1| over beams at the model's CURRENT positions. Used to decide
+ *  whether a goal pose is isometrically consistent (complete) or a chimera. */
+function beamStrainAt(model: BarHingeModel): number {
+  const p = model.position;
+  let sum = 0;
+  for (let i = 0; i < model.beams.count; i++) {
+    const a = model.beams.n0[i];
+    const b = model.beams.n1[i];
+    const l = Math.hypot(p[3 * a] - p[3 * b], p[3 * a + 1] - p[3 * b + 1], p[3 * a + 2] - p[3 * b + 2]);
+    sum += Math.abs(l / model.beams.rest[i] - 1);
+  }
+  return sum / Math.max(1, model.beams.count);
+}
+
 /** True when the file looks like a foldable crease pattern (has verts, faces, edges). */
 export function isFoldable(fold: FoldFile): boolean {
   return (
@@ -127,23 +141,44 @@ export function buildSceneFromFold(fold: FoldFile): FoldScene {
 
   // Crease targets.
   //
-  // Guided: derive every crease's design angle from the GOAL POSE itself
-  // (DETC forward process — M0 defines the targets). This is sign-robust: a
-  // file's edges_foldAngle sign convention cannot be trusted to match the
-  // model's internal per-crease frame (face1/face2 and n3→n4 ordering are
-  // buildModel's choice), and a single flipped crease folds a limb to the
-  // mirror side. Measuring θ at the goal yields the exact angle in the
-  // model's own frame; a file with consistent signs gets identical values.
+  // Guided: derive a crease's design angle from the GOAL POSE where the goal
+  // can be trusted (DETC forward process — M0 defines the targets). This is
+  // sign-robust: a file's edges_foldAngle sign convention cannot be trusted
+  // to match the model's internal per-crease frame (face1/face2 and n3→n4
+  // ordering are buildModel's choice), and a single flipped crease folds a
+  // limb to the mirror side.
   //
-  // Free fold: honour an explicit edges_foldAngle when present, else the
-  // AKDE-convention defaults (M:+, V:−).
+  // BUT a goal frame is only trustworthy as far as it is isometrically
+  // consistent: some generators (e.g. the AKDE pyramid examples) fill real
+  // folded positions only for DRIVEN vertices and leave the rest at flat
+  // coords — measuring θ against that chimera poisons the targets (facet
+  // creases read ±1.5 rad, mountains read 0) and the fold crumples flat.
+  // So: if the whole goal pose is consistent (near-zero bar strain), measure
+  // every crease there; otherwise measure only creases whose four nodes are
+  // all driven (their goals are real), and keep the explicit edges_foldAngle
+  // or the AKDE assignment defaults (M:+, V:−) for the rest.
+  //
+  // Free fold: explicit edges_foldAngle when present, else the defaults.
   if (guided) {
     const flat = model.position.slice();
     model.position.set(model.goal);
+    const goalConsistent = beamStrainAt(model) < 0.05;
     for (let i = 0; i < model.creases.count; i++) {
-      model.creases.targetTheta[i] = clampFold(
-        measureTheta(model, model.creases.face1[i], model.creases.face2[i], model.creases.n3[i], model.creases.n4[i]),
-      );
+      const c = model.creases;
+      const trustworthy =
+        goalConsistent ||
+        (model.driven[c.n1[i]] === 1 &&
+          model.driven[c.n2[i]] === 1 &&
+          model.driven[c.n3[i]] === 1 &&
+          model.driven[c.n4[i]] === 1);
+      if (trustworthy) {
+        c.targetTheta[i] = clampFold(measureTheta(model, c.face1[i], c.face2[i], c.n3[i], c.n4[i]));
+      } else {
+        const key = ekey(c.n3[i], c.n4[i]);
+        const t = explicitTarget.get(key);
+        if (t !== undefined) c.targetTheta[i] = t;
+        // else: keep buildModel's assignment-based default (the AKDE design)
+      }
     }
     model.position.set(flat);
   } else {

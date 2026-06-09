@@ -4,6 +4,12 @@ Kirigamizer is organized as a small MVC app with a separate simulation domain.
 The goal is to keep DOM/WebGL code, app state, and geometry/simulation logic
 independently testable.
 
+Related structure docs:
+
+- `docs/repository-structure.md` maps the top-level repository.
+- `docs/source-structure.md` maps every active source file by responsibility.
+- `docs/import-boundaries.md` gives allowed/forbidden dependency rules.
+
 ## Layers
 
 | Layer | Path | Responsibility |

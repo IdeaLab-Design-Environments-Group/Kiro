@@ -4,6 +4,12 @@ This repo is a Vite/TypeScript app. The current conversion pipeline is still a
 passthrough stub for FOLD/FKLD files, with mesh import reserved for the future
 Kirigamizer conversion pipeline.
 
+For placement decisions, read these first:
+
+- `docs/source-structure.md` for file ownership.
+- `docs/import-boundaries.md` for dependency rules.
+- `docs/pipeline.md` for mesh conversion stages.
+
 ## Commands
 
 ```sh
