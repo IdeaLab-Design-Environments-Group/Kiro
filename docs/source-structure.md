@@ -3,6 +3,8 @@
 `src/` is the active application source. It is split by responsibility rather
 than by file type.
 
+For narrower subsystem docs, start at `docs/subsystems/index.md`.
+
 ## Tree
 
 ```text
@@ -195,4 +197,3 @@ Rules:
 
 Keep class names aligned with view components. Avoid adding layout-specific
 styles inside TypeScript files.
-

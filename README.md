@@ -73,6 +73,7 @@ npm run preview   # serve the production build
 | `docs/repository-structure.md` | Top-level folders, generated files, public assets, and reference code. |
 | `docs/source-structure.md` | Detailed `src/` file-by-file responsibility map. |
 | `docs/import-boundaries.md` | Allowed/forbidden imports and boundary audit commands. |
+| `docs/subsystems/index.md` | Subsystem-specific docs grouped by working area. |
 | `docs/simulation.md` | Bar-and-hinge solver structure, guided/free modes, and debugging notes. |
 | `docs/pipeline.md` | Mesh import, conditioning, curvature, and cut-planning pipeline contracts. |
 | `docs/testing.md` | Build/test checks and troubleshooting checklists. |

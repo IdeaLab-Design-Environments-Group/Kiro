@@ -9,11 +9,32 @@
  *
  * The crease targets drive the fold as `foldPercent` ramps 0→1 (the standard
  * Origami-Simulator forward fold), so no pyramid-style goal mesh is needed.
+ *
+ * PLAIN FOLD files (no `fkld:` keys) run the EXACT simulation of Ghassaei,
+ * Demaine & Gershenfeld, "Fast, Interactive Origami Simulation using GPU
+ * Computation" (7OSME 2018). The force core in forces.ts already implements
+ * the paper's equations verbatim (axial Eq 1; crease Eqs 2–6 — the
+ * projection weights coef/h are identical to the paper's cotangent weights
+ * via proj₁ = h₁·cot α₃,₁₄ and l = h₁·(cot α₃,₁₄ + cot α₄,₃₁); face §2.4;
+ * Euler + Δt Eqs 7–8; per-edge viscous damping c = 2ζ√(k·m)). What this
+ * adapter adds for plain FOLD is the paper's CONVENTION layer (§2.3, §3):
+ *   - θ_target sign per the FOLD spec: mountain NEGATIVE, valley POSITIVE
+ *     (the engine measures mountains positive, so file angles are negated);
+ *   - no explicit edges_foldAngle → full-fold defaults ±π (the simulator's
+ *     fold-percent slider scales them), NOT the AKDE design angles;
+ *   - k_crease = l₀·k_fold (M/V), l₀·k_facet (F), and **0 for boundary or
+ *     undriven ("B"/"U"/missing) creases** — undriven hinges swing free;
+ *   - no MAX_FOLD clamp (targets are exactly the file's angles);
+ *   - ζ = 0.45, inside the paper's stable range 0.01 ≤ ζ ≤ 0.5 (Fig. 5
+ *     constants EA = 20, k_fold = k_facet = 0.7, k_face = 0.2 are the
+ *     engine defaults already).
+ * FKLD files keep the kirigami/AKDE conventions (guided goal frames, design
+ * angles, overdamping) unchanged.
  */
-import type { FoldFile } from "../model/fold-file.js";
+import { isFkld, type FoldFile } from "../model/fold-file.js";
 import { type Vec3, vec3 } from "./vec3.js";
 import { type EdgeAssignment, foldNetFromMesh } from "./foldnet.js";
-import { type BarHingeModel, buildModel, DEFAULT_PARAMS } from "./model.js";
+import { type BarHingeModel, buildModel, DEFAULT_PARAMS, type SolverParams } from "./model.js";
 import { FoldSolver, measureTheta } from "./solver.js";
 import type { FoldScene } from "./build.js";
 
@@ -21,6 +42,9 @@ export type { FoldScene };
 
 /** Target bounding-box size after normalization (keeps the solver dt + camera framing sane). */
 const TARGET_SIZE = 100;
+
+/** Paper-exact parameters for plain FOLD files (Fig. 5 + §2.5: ζ within [0.01, 0.5]). */
+export const ORIGAMI_PARAMS: SolverParams = { ...DEFAULT_PARAMS, zeta: 0.45 };
 
 /** FOLD assignment letters → engine assignment (U/unknown folds treated as flat facets). */
 function mapAssignment(letter: string | undefined): EdgeAssignment {
@@ -112,11 +136,13 @@ export function buildSceneFromFold(fold: FoldFile): FoldScene {
   const ea = (fold.edges_assignment as string[] | undefined) ?? [];
   const fa = fold.edges_foldAngle as number[] | undefined; // degrees, per FOLD spec
   const assignOf = new Map<string, EdgeAssignment>();
+  const rawAssignOf = new Map<string, string | undefined>(); // unmapped letters ("U" preserved)
   const explicitTarget = new Map<string, number>(); // only edges with a real edges_foldAngle
   for (let i = 0; i < ev.length; i++) {
     const [a, b] = ev[i];
     const key = ekey(a, b);
     assignOf.set(key, mapAssignment(ea[i]));
+    rawAssignOf.set(key, ea[i]);
     const deg = fa?.[i];
     if (typeof deg === "number") explicitTarget.set(key, clampFold((deg * Math.PI) / 180));
   }
@@ -131,7 +157,10 @@ export function buildSceneFromFold(fold: FoldFile): FoldScene {
 
   // Cut ("C") edges become free flaps via AKDE's cutRatio API (DETC Eq 6: cutRatio=1 ⇒
   // k_crease=0), so kirigami cuts open instead of being glued flat by a θ=0 hinge.
-  const model = buildModel(net, DEFAULT_PARAMS, (e) => (e.assignment === "C" ? 1 : 0));
+  const plainFold = !isFkld(fold);
+  const model = buildModel(net, plainFold ? ORIGAMI_PARAMS : DEFAULT_PARAMS, (e) =>
+    e.assignment === "C" ? 1 : 0,
+  );
 
   // Guided fold (DETC forward process): if the FKLD ships a folded-form goal frame +
   // fkld:vertices_driven, drive the boundary to the designed shape M0 so the fold lands

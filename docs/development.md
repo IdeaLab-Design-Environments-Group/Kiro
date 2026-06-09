@@ -8,6 +8,7 @@ For placement decisions, read these first:
 
 - `docs/source-structure.md` for file ownership.
 - `docs/import-boundaries.md` for dependency rules.
+- `docs/subsystems/index.md` for subsystem-specific rules.
 - `docs/pipeline.md` for mesh conversion stages.
 
 ## Commands
