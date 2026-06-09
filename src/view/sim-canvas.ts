@@ -1,9 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { FoldScene } from "../sim/index.js";
-import type { FoldSolver } from "../sim/solver.js";
-import { GpuFoldSolver } from "../sim/gpu/gpu-solver.js";
-import { dampVelocity, removeRigidBodyMotion } from "../sim/stabilize.js";
+import type { FoldScene, FoldSolver } from "../sim/index.js";
+import { dampVelocity, removeRigidBodyMotion } from "../sim/index.js";
+import { GpuFoldSolver } from "../sim/gpu/index.js";
 
 /**
  * Three.js viewport for the forward fold — renders the FoldNet as lit triangle faces plus

@@ -36,8 +36,7 @@
  * pins the global pose, so no ICP is needed). ε_sim = ε_mm · scale.
  */
 
-import { buildSceneFromFold } from "../sim/fold-adapter.js";
-import { measureTheta } from "../sim/solver.js";
+import { buildSceneFromFold, measureTheta } from "../sim/index.js";
 import type { FoldFile } from "../model/fold-file.js";
 import type { TriMesh, Vec3, VerifyReport } from "./types.js";
 import { PipelineError } from "./types.js";
