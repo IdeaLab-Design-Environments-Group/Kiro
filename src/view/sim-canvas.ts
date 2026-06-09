@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { FoldScene } from "./build.js";
-import type { FoldSolver } from "./solver.js";
-import { GpuFoldSolver } from "./gpu/gpu-solver.js";
+import type { FoldScene } from "../sim/index.js";
+import type { FoldSolver } from "../sim/solver.js";
+import { GpuFoldSolver } from "../sim/gpu/gpu-solver.js";
 
 /**
  * Three.js viewport for the forward fold — ported from AKDE's `sim-canvas.ts`.

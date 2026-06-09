@@ -10,7 +10,7 @@
  * The crease targets drive the fold as `foldPercent` ramps 0→1 (the standard
  * Origami-Simulator forward fold), so no pyramid-style goal mesh is needed.
  */
-import type { FoldFile } from "../types.js";
+import type { FoldFile } from "../model/fold-file.js";
 import { type Vec3, vec3 } from "./vec3.js";
 import { type EdgeAssignment, foldNetFromMesh } from "./foldnet.js";
 import { type BarHingeModel, buildModel, DEFAULT_PARAMS } from "./model.js";
@@ -43,10 +43,11 @@ function mapAssignment(letter: string | undefined): EdgeAssignment {
  */
 const MAX_FOLD = 2.7; // ≈ 155°
 
-/** Default target dihedral (rad) by assignment when the file has no edges_foldAngle. */
+/** Default target dihedral (rad) by assignment when the file has no edges_foldAngle.
+ *  AKDE convention (matches buildModel): mountain folds positive, valley negative. */
 function defaultTarget(a: EdgeAssignment): number {
-  if (a === "M") return -1.6;
-  if (a === "V") return +1.6;
+  if (a === "M") return +1.6;
+  if (a === "V") return -1.6;
   return 0;
 }
 
@@ -114,7 +115,9 @@ export function buildSceneFromFold(fold: FoldFile): FoldScene {
     scale,
   });
 
-  const model = buildModel(net, DEFAULT_PARAMS);
+  // Cut ("C") edges become free flaps via AKDE's cutRatio API (DETC Eq 6: cutRatio=1 ⇒
+  // k_crease=0), so kirigami cuts open instead of being glued flat by a θ=0 hinge.
+  const model = buildModel(net, DEFAULT_PARAMS, (e) => (e.assignment === "C" ? 1 : 0));
 
   // Guided fold (DETC forward process): if the FKLD ships a folded-form goal frame +
   // fkld:vertices_driven, drive the boundary to the designed shape M0 so the fold lands
@@ -143,7 +146,7 @@ export function buildSceneFromFold(fold: FoldFile): FoldScene {
     model.fixed[anchor] = 1;
   }
 
-  const solver = new FoldSolver(model, guided ? 1 : 0.5); // guided fold is stable at full dt
+  const solver = new FoldSolver(model); // AKDE-exact solver (dt from computeDt, 0.9 margin)
   return { net, model, solver };
 }
 

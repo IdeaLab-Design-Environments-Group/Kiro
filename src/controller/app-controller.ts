@@ -7,8 +7,8 @@
  */
 import { type AppState, AppStore } from "../model/app-store.js";
 import { deriveFacts } from "../model/derive-facts.js";
-import { type FoldFile, isFkld } from "../types.js";
-import { summarizeFkldForDisplay } from "../fkld-metadata.js";
+import { type FoldFile, isFkld } from "../model/fold-file.js";
+import { summarizeFkldForDisplay } from "../model/fkld-metadata.js";
 import { buildScene, canSimulate } from "../sim/scene.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { MetadataPanel } from "../view/metadata-panel.js";

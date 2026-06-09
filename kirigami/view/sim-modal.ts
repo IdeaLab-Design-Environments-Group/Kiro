@@ -1,14 +1,17 @@
-import type { FoldScene } from "../sim/index.js";
+import type { KirigamiState } from "../model/types.js";
+import { buildFoldScene } from "../sim/index.js";
 import type { SimCanvas } from "./sim-canvas.js";
 
-/** Returns a ready fold scene when the sim opens, or null when no model is loaded. */
-export type SimSceneProvider = () => { scene: FoldScene; title: string } | null;
+/** Returns the current model state when the simulation opens; null when inputs are invalid. */
+export type SimStateProvider = () => KirigamiState | null;
 
 /**
- * "3D Sim" trigger + modal hosting the Three.js fold simulation. Opening
- * builds the scene from the current model and starts the CPU solver; the
- * fold slider scrubs `foldPercent` 0→1; "Reset fold" rebuilds from the
- * current model. The canvas (and Three.js) load lazily on first open.
+ * "3D Sim" trigger + modal hosting the Three.js fold simulation (`SimCanvas`). Opening builds a
+ * fold world from the current state and starts the solver; closing stops the loop (the WebGL
+ * context is kept and reused). "Reset fold" rebuilds the world from the latest state.
+ *
+ * The canvas is constructed lazily on first open, after the overlay is shown, so its mount has
+ * layout (non-zero size) when Three.js reads the dimensions.
  */
 export class SimModal {
   private readonly overlay: HTMLElement;
@@ -17,7 +20,7 @@ export class SimModal {
   private readonly statusEl: HTMLElement;
   private readonly foldSlider: HTMLInputElement;
   private readonly foldValue: HTMLElement;
-  private provider: SimSceneProvider | null = null;
+  private provider: SimStateProvider | null = null;
   private canvas: SimCanvas | null = null;
 
   constructor() {
@@ -25,7 +28,6 @@ export class SimModal {
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
     this.trigger.textContent = "3D Sim";
-    this.trigger.disabled = true;
     this.trigger.addEventListener("click", () => {
       this.open().catch((err) => {
         this.statusEl.textContent = "Failed to load the 3D viewer.";
@@ -62,8 +64,13 @@ export class SimModal {
     this.foldValue = this.overlay.querySelector(".sim-fold-value")!;
 
     this.foldSlider.addEventListener("input", () => this.applyFold());
-    this.overlay.querySelector(".sim-modal-close")!.addEventListener("click", () => this.close());
-    this.overlay.querySelector(".sim-reset-btn")!.addEventListener("click", () => this.loadWorld());
+
+    this.overlay
+      .querySelector(".sim-modal-close")!
+      .addEventListener("click", () => this.close());
+    this.overlay
+      .querySelector(".sim-reset-btn")!
+      .addEventListener("click", () => this.loadWorld());
     this.overlay.addEventListener("click", (e) => {
       if (e.target === this.overlay) this.close();
     });
@@ -72,25 +79,24 @@ export class SimModal {
     });
   }
 
+  /** Mount the "3D Sim" trigger button into a container. */
   mountTrigger(container: HTMLElement): void {
     container.appendChild(this.trigger);
   }
 
-  setProvider(provider: SimSceneProvider): void {
+  /** Supply the current model state; called each time the simulation opens or resets. */
+  setProvider(provider: SimStateProvider): void {
     this.provider = provider;
-  }
-
-  /** Enable/disable the 3D Sim button (e.g. only when a foldable model is loaded). */
-  setEnabled(enabled: boolean): void {
-    this.trigger.disabled = !enabled;
   }
 
   async open(): Promise<void> {
     this.overlay.hidden = false;
+    // Lazy-load Three.js (and the canvas) only on first open, so it stays out of the
+    // initial app bundle. Construct after the overlay is shown so the mount has layout.
     if (!this.canvas) {
       this.statusEl.textContent = "Loading 3D viewer…";
       const { SimCanvas } = await import("./sim-canvas.js");
-      if (this.overlay.hidden) return;
+      if (this.overlay.hidden) return; // user closed before it finished loading
       this.canvas = new SimCanvas(this.mount);
     }
     this.loadWorld();
@@ -102,27 +108,22 @@ export class SimModal {
   }
 
   private loadWorld(): void {
-    const built = this.provider?.() ?? null;
-    if (!built) {
-      this.statusEl.textContent = "No foldable model — load a FOLD/FKLD crease pattern, then reopen.";
+    const state = this.provider?.() ?? null;
+    if (!state) {
+      this.statusEl.textContent =
+        "Inputs are invalid — adjust the parameters, then reopen.";
       this.canvas?.stop();
       return;
     }
     if (!this.canvas) return;
-    try {
-      this.canvas.setScene(built.scene);
-      this.applyFold();
-      this.canvas.start();
-      const { net } = built.scene;
-      this.statusEl.textContent =
-        `Folding ${built.title} — ${net.vertices.length} verts, ${net.faces.length} tris, ` +
-        `${net.edges.filter((e) => e.faces.length >= 2).length} creases. Drag to orbit.`;
-    } catch (err) {
-      this.statusEl.textContent = `Cannot simulate this model: ${(err as Error).message}`;
-      this.canvas.stop();
-    }
+    this.canvas.setScene(buildFoldScene(state));
+    this.applyFold(); // honour the slider's current value for this scene
+    this.canvas.start();
+    const n = Math.round(state.inputs.edgeCount);
+    this.statusEl.textContent = `Folding N=${n} pyramid — apex rises to H=${state.H.toFixed(0)} mm. Drag to orbit.`;
   }
 
+  /** Push the slider value to the canvas and update the readout. */
   private applyFold(): void {
     const pct = Number(this.foldSlider.value);
     this.foldValue.textContent = `${pct}%`;

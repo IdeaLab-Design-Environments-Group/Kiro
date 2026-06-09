@@ -5,7 +5,7 @@
  *    why the pyramid folds crisply;
  *  - otherwise fall back to the generic crease-target fold (`buildSceneFromFold`).
  */
-import type { FoldFile } from "../types.js";
+import type { FoldFile } from "../model/fold-file.js";
 import type { KirigamiInputs } from "../model/types.js";
 import { computeState } from "../model/geometry.js";
 import { buildFoldScene } from "./build.js";

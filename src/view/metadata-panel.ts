@@ -3,7 +3,7 @@
  * by the `fkld-metadata` presenter; the screen and the file always agree
  * because every value is read straight from the FKLD/FOLD object.
  */
-import type { SummarySection } from "../fkld-metadata.js";
+import type { SummarySection } from "../model/fkld-metadata.js";
 import { el, heading } from "./dom.js";
 
 export class MetadataPanel {

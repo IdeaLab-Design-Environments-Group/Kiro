@@ -3,7 +3,7 @@
  * `fkld-metadata-summary.ts`. Returns ordered sections/rows so the view layer
  * is a thin DOM wrapper. Every value comes from the FKLD/FOLD object itself.
  */
-import type { FoldFile } from "./types.js";
+import type { FoldFile } from "./fold-file.js";
 
 export interface SummaryRow {
   term: string;

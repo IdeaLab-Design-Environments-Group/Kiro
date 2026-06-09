@@ -4,7 +4,7 @@
  * pairs. Mirrors `fkld-metadata.ts` (the FKLD-panel presenter) for the convert
  * column.
  */
-import { type LoadedModel, isFkld } from "../types.js";
+import { type LoadedModel, isFkld } from "./fold-file.js";
 
 export function deriveFacts(model: LoadedModel): [string, string][] {
   if (model.kind === "fold") {

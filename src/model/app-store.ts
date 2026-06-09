@@ -7,7 +7,7 @@
  * model lives separately under `sim/` (the domain); this store only holds the
  * app/UI state that the three panels and the action buttons read.
  */
-import type { LoadedModel } from "../types.js";
+import type { LoadedModel } from "./fold-file.js";
 
 export type StatusKind = "" | "ok" | "bad";
 

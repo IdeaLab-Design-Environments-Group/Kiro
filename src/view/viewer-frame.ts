@@ -4,7 +4,7 @@
  * embedded viewer posts `kirigamizer:viewer-ready`, then forwards it. Callers
  * just call `show(object, name)`; the readiness/queueing is hidden here.
  */
-import type { FoldFile } from "../types.js";
+import type { FoldFile } from "../model/fold-file.js";
 import { el } from "./dom.js";
 
 interface LoadPayload {
