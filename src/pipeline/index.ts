@@ -11,3 +11,5 @@ export * from "./conditioning.js";
 export * from "./curvature.js";
 export * from "./plan-cuts.js";
 export * from "./unfold.js";
+export * from "./route-seams.js";
+export * from "./emit.js";
