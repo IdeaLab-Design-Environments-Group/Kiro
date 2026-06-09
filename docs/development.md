@@ -34,6 +34,7 @@ Use the MVC boundary when adding code:
 - Add state or pure calculations under `src/model/`.
 - Add DOM/WebGL UI under `src/view/`.
 - Add app orchestration under `src/controller/`.
+- Add mesh-to-kirigami conversion stages under `src/pipeline/`.
 - Add folding physics or scene construction under `src/sim/`.
 - Keep `src/main.ts` as a composition root.
 
@@ -46,6 +47,9 @@ Examples:
   `AppController`.
 - New simulation path: add a scene builder in `src/sim/`, then choose it from
   `src/sim/scene.ts`.
+- New mesh conversion stage: define or extend DTOs in `src/pipeline/types.ts`,
+  implement a pure stage under `src/pipeline/`, then wire it from the controller
+  after tests exist.
 
 ## Testing Expectations
 
@@ -59,6 +63,14 @@ For simulation changes, also test a small hinge or simple crease pattern before
 testing complex FKLD files. The most useful first check is whether positive and
 negative target fold angles settle to positive and negative measured theta.
 
+For pipeline changes, test each stage with small meshes:
+
+- one triangle;
+- two triangles sharing one edge;
+- an open disk with a boundary loop;
+- a non-manifold edge that should fail;
+- a negative-defect vertex that exercises the wedge rule.
+
 ## Generated Files
 
 `dist/` is Vite output. Do not edit it by hand. Rebuild it with:
@@ -69,4 +81,3 @@ npm run build
 
 `public/examples/` contains source examples served by Vite. Add examples there,
 then rebuild if `dist/` needs to include them.
-

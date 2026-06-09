@@ -13,6 +13,7 @@ independently testable.
 | Model | `src/model/` | Application state, FOLD/FKLD data types, geometry math, and pure presenters. No DOM. |
 | View | `src/view/` | DOM/WebGL rendering and event emission. No parsing or durable app state. |
 | Simulation domain | `src/sim/` | Bar-and-hinge topology, physics, solvers, and scene builders. No DOM. |
+| Conversion pipeline | `src/pipeline/` | Pure mesh-to-kirigami conversion stages and DTO contracts. No DOM/app state. |
 
 ## Data Flow
 
@@ -47,6 +48,8 @@ ConvertPanel.onFileChosen(file)
 - `src/controller/*` is the only app layer that knows about both model and view.
 - `src/sim/*` must not import from `src/view/*`; rendering belongs in
   `src/view/sim-canvas.ts`.
+- `src/pipeline/*` must not import from `src/view/*` or `src/controller/*`;
+  controller code calls pipeline code, never the reverse.
 - `src/main.ts` should stay boring: instantiate and wire objects only.
 
 ## File Ownership
@@ -79,3 +82,11 @@ Simulation files:
 - `src/sim/foldnet.ts`, `build.ts`, `fold-adapter.ts`, and `scene.ts` build
   simulation scenes from kirigami state or FOLD/FKLD data.
 
+Pipeline files:
+
+- `src/pipeline/types.ts` defines cross-stage DTOs and `PipelineError`.
+- `src/pipeline/import.ts` parses OBJ and ASCII STL text into `TriMesh`.
+- `src/pipeline/conditioning.ts` repairs and gates imported meshes.
+- `src/pipeline/mesh.ts` derives topology and one-ring fans.
+- `src/pipeline/curvature.ts` computes defects and target dihedrals.
+- `src/pipeline/plan-cuts.ts` routes cut forests over the mesh graph.

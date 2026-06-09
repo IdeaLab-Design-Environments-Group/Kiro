@@ -8,3 +8,5 @@ export * from "./types.js";
 export * from "./mesh.js";
 export * from "./import.js";
 export * from "./conditioning.js";
+export * from "./curvature.js";
+export * from "./plan-cuts.js";

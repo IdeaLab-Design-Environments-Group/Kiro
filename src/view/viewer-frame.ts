@@ -20,6 +20,7 @@ export class ViewerFrame {
   private pending: LoadPayload | null = null;
   /** The object currently displayed — so the 3D Sim folds exactly what the viewer shows. */
   private shown: { object: FoldFile; name: string } | null = null;
+  private loadedHandler: (object: FoldFile, name: string) => void = () => {};
 
   constructor() {
     this.element = el("section", "column viewer-column");

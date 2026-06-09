@@ -71,6 +71,8 @@ npm run preview   # serve the production build
 |------|---------|
 | `docs/architecture.md` | MVC boundaries, data flow, and file ownership. |
 | `docs/simulation.md` | Bar-and-hinge solver structure, guided/free modes, and debugging notes. |
+| `docs/pipeline.md` | Mesh import, conditioning, curvature, and cut-planning pipeline contracts. |
+| `docs/testing.md` | Build/test checks and troubleshooting checklists. |
 | `docs/development.md` | Local commands, feature-placement rules, testing expectations, and generated-file notes. |
 
 ## Files
@@ -87,6 +89,7 @@ npm run preview   # serve the production build
 | `src/model/geometry.ts` · `src/model/types.ts` | kirigami geometry/domain calculations |
 | `src/view/` | DOM/WebGL views: convert panel, metadata panel, viewer frame, header actions, sim modal/canvas |
 | `src/styles.css` | AKDE-derived theme (incl. 3D-sim modal) |
+| `src/pipeline/` | pure mesh-to-kirigami conversion stages and DTO contracts |
 | `src/sim/` | simulation domain: bar-and-hinge fold engine + `fold-adapter`/`scene` builders |
 | `docs/` | architecture, simulation, and development notes |
 | `public/viewer/index.html` | FKLD viewer (copied from FKLD, + host bridge) |

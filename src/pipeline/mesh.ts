@@ -153,6 +153,62 @@ export function edgeLength(mesh: TriMesh, topo: MeshTopology, e: number): number
 }
 
 /**
+ * Split vertex v's ordered fan into wedges separated by "separator" edges
+ * (cut edges and boundary edges). Returns one entry per wedge with the fan
+ * faces in order and the summed interior angle at v.
+ *
+ * Interior vertex, no separators → a single wedge spanning the full ring.
+ * Used by the M2 wedge rule (every wedge at a δ<0 vertex must span < 2π)
+ * and by M3's `cutAlongEdges` (one vertex copy per wedge).
+ */
+export function vertexWedges(
+  mesh: TriMesh,
+  topo: MeshTopology,
+  v: number,
+  isSeparator: (edge: number) => boolean,
+): { faces: number[]; angle: number }[] {
+  const fan = topo.vertexFaces[v];
+  if (fan.length === 0) return [];
+  const angleAt = (f: number): number => {
+    const idx = mesh.faces[f].indexOf(v);
+    return faceAngles(mesh, f)[idx];
+  };
+  // Separator edge id between consecutive fan faces (shared edge through v).
+  const between = (f1: number, f2: number): number => {
+    const shared = mesh.faces[f1].filter((x) => mesh.faces[f2].includes(x) && x !== v);
+    return topo.edgeIndex.get(edgeKey(v, shared[0]))!;
+  };
+  const isBoundaryVertex = topo.boundaryVertices.has(v);
+  const n = fan.length;
+  // Find wedge break positions: index i means "break before fan[i]".
+  const breaks: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (i === 0 && isBoundaryVertex) {
+      breaks.push(0); // open fan starts at a boundary edge
+      continue;
+    }
+    const prev = fan[(i - 1 + n) % n];
+    if (i === 0 && !isBoundaryVertex) {
+      if (isSeparator(between(prev, fan[0]))) breaks.push(0);
+      continue;
+    }
+    if (isSeparator(between(fan[i - 1], fan[i]))) breaks.push(i);
+  }
+  if (breaks.length === 0) {
+    return [{ faces: [...fan], angle: fan.reduce((acc, f) => acc + angleAt(f), 0) }];
+  }
+  const wedges: { faces: number[]; angle: number }[] = [];
+  for (let w = 0; w < breaks.length; w++) {
+    const start = breaks[w];
+    const end = w + 1 < breaks.length ? breaks[w + 1] : (isBoundaryVertex ? n : breaks[0] + n);
+    const faces: number[] = [];
+    for (let i = start; i < end; i++) faces.push(fan[i % n]);
+    wedges.push({ faces, angle: faces.reduce((acc, f) => acc + angleAt(f), 0) });
+  }
+  return wedges;
+}
+
+/**
  * Count boundary loops by walking boundary edges. Used by the genus gate:
  * for a genus-0 surface with b boundary loops, χ = 2 − b.
  */

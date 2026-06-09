@@ -100,6 +100,76 @@ export function makeIcosphere(subdiv = 1, radius = 50): TriMesh {
   return { vertices, faces };
 }
 
+/**
+ * Saddle fan: one interior vertex with δ < 0 — a hexagonal fan whose ring
+ * alternates ±zAmp so the apex angle sum exceeds 2π. Disk (χ=1), ring is
+ * boundary, center (vertex 0) is the negative-curvature terminal.
+ */
+export function makeSaddleFan(ringR = 50, zAmp = 20): TriMesh {
+  const vertices: Vec3[] = [{ x: 0, y: 0, z: 0 }];
+  const N = 6;
+  for (let i = 0; i < N; i++) {
+    const a = (2 * Math.PI * i) / N;
+    vertices.push({ x: ringR * Math.cos(a), y: ringR * Math.sin(a), z: i % 2 === 0 ? zAmp : -zAmp });
+  }
+  const faces: [number, number, number][] = [];
+  for (let i = 0; i < N; i++) faces.push([0, 1 + i, 1 + ((i + 1) % N)]);
+  return { vertices, faces };
+}
+
+/** Regular octahedron. V=6 F=8 E=12 χ=2; δ(v) = 2π/3 > 0 at every vertex. */
+export function makeOctahedron(size = 100): TriMesh {
+  const s = size / 2;
+  const vertices: Vec3[] = [
+    { x: s, y: 0, z: 0 },
+    { x: -s, y: 0, z: 0 },
+    { x: 0, y: s, z: 0 },
+    { x: 0, y: -s, z: 0 },
+    { x: 0, y: 0, z: s },
+    { x: 0, y: 0, z: -s },
+  ];
+  const faces: [number, number, number][] = [
+    [0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4],
+    [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5],
+  ];
+  return { vertices, faces };
+}
+
+/**
+ * Open N-gon pyramid (lateral faces only, no base): apex (vertex 0) carries
+ * the positive defect; the base ring is boundary.
+ */
+export function makePyramid(N = 4, L = 50, H = 30): TriMesh {
+  const R = L / (2 * Math.sin(Math.PI / N));
+  const vertices: Vec3[] = [{ x: 0, y: 0, z: H }];
+  for (let i = 0; i < N; i++) {
+    const a = (2 * Math.PI * i) / N;
+    vertices.push({ x: R * Math.cos(a), y: R * Math.sin(a), z: 0 });
+  }
+  const faces: [number, number, number][] = [];
+  for (let i = 0; i < N; i++) faces.push([0, 1 + i, 1 + ((i + 1) % N)]);
+  return { vertices, faces };
+}
+
+/** Flat planar grid patch: every interior vertex flat; only boundary remains. */
+export function makeGrid(nx = 4, ny = 4, cell = 25): TriMesh {
+  const vertices: Vec3[] = [];
+  for (let j = 0; j <= ny; j++) {
+    for (let i = 0; i <= nx; i++) {
+      vertices.push({ x: i * cell, y: j * cell, z: 0 });
+    }
+  }
+  const id = (i: number, j: number): number => j * (nx + 1) + i;
+  const faces: [number, number, number][] = [];
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      faces.push([id(i, j), id(i + 1, j), id(i + 1, j + 1)]);
+      faces.push([id(i, j), id(i + 1, j + 1), id(i, j + 1)]);
+    }
+  }
+  return { vertices, faces };
+}
+
 /** Serialize a TriMesh as minimal OBJ text (round-trip test helper). */
 export function toObj(mesh: TriMesh): string {
   const lines: string[] = [];

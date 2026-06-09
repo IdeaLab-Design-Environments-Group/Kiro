@@ -632,6 +632,12 @@
     buildPropertySelect(file);
     setStatus(`Loaded: ${sourceName}`, 'ok');
     updateZoomPill();
+    // Report the model now on screen back to the Kirigamizer host, so the 3D Sim folds exactly
+    // what the viewer shows — regardless of how it was loaded (host postMessage, file picker,
+    // example dropdown, or drag-and-drop).
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'kirigamizer:viewer-loaded', fkld: file, name: sourceName }, '*');
+    }
   }
   function loadJsonString(text, name) {
     try {
