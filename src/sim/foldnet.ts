@@ -1,5 +1,5 @@
-import type { KirigamiState } from "../model/types.js";
-import { computeMinorCutLength } from "../model/geometry.js";
+import type { KirigamiState } from "@kirigami/model/types.js";
+import { computeMinorCutLength } from "@kirigami/model/geometry.js";
 import { vec3, type Vec3 } from "./vec3.js";
 
 /**

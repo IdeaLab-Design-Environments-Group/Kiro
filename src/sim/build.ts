@@ -1,4 +1,4 @@
-import type { KirigamiState } from "../model/types.js";
+import type { KirigamiState } from "@kirigami/model/types.js";
 import { buildFoldNet, foldNetFromMesh, type FoldNet } from "./foldnet.js";
 import { buildModel, DEFAULT_PARAMS, type BarHingeModel, type SolverParams } from "./model.js";
 import { FoldSolver } from "./solver.js";

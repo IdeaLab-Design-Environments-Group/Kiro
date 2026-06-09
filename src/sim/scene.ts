@@ -12,8 +12,8 @@
  *  - a non-foldable file we can still recognize as a pyramid spec: recompute as a last resort.
  */
 import { type FoldFile, isFkld } from "../model/fold-file.js";
-import type { KirigamiInputs } from "../model/types.js";
-import { computeState } from "../model/geometry.js";
+import type { KirigamiInputs } from "@kirigami/model/types.js";
+import { computeState } from "@kirigami/model/geometry.js";
 import { buildFoldScene } from "./build.js";
 import { buildSceneFromFold, isFoldable } from "./fold-adapter.js";
 import type { FoldScene } from "./build.js";

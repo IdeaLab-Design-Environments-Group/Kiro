@@ -2,6 +2,12 @@
 
 This document is the practical rulebook for keeping the code separated.
 
+**Enforcement:** the rules below are mechanically checked by
+`tests/current/architecture/import-boundaries.test.ts` — run
+`npx vitest run tests/current/architecture` (also part of `npm test`).
+The test is the executable spec; loosening a rule requires updating both the
+test and this document in the same change.
+
 ## Allowed Direction
 
 ```text
@@ -57,15 +63,20 @@ Do not add these imports:
 
 Some dependencies are intentional:
 
-- `src/view/sim-canvas.ts` imports simulation solvers because it renders live
-  simulation state.
-- `src/pipeline/emit.ts` imports FKLD spec/validators from `fkld/`.
-- `src/pipeline/verify.ts` imports `buildSceneFromFold` because verification
-  uses the same adapter as the UI.
+- `src/view/sim-canvas.ts` imports simulation solvers **via the barrels only**:
+  Node-safe APIs from `src/sim/index.ts`, the GPU solver from
+  `src/sim/gpu/index.ts` (the one sanctioned browser-only entry point).
+- `src/pipeline/emit.ts` imports FKLD spec/validators via the `@fkld` alias
+  (never `../../fkld/` relative paths).
+- `src/pipeline/verify.ts` imports `buildSceneFromFold`/`measureTheta` from
+  `src/sim/index.ts` because verification uses the same adapter as the UI.
 - `src/sim/build.ts` imports `KirigamiState` and geometry-compatible types for
   guided AKDE scene construction.
+- Shared dependency-free math lives in `src/core/` (e.g. `core/vec3.ts`);
+  `src/sim/vec3.ts` is a compatibility re-export of it. `core/` imports
+  nothing from other layers.
 
-Document any new exception in this file.
+Document any new exception in this file **and** in the architecture test.
 
 ## Quick Audit Commands
 

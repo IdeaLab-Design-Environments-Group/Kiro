@@ -33,10 +33,10 @@
  * is deferred.
  */
 
-import { KEYS } from "../../fkld/spec.coffee";
-import { validateEdgeCutTypes } from "../../fkld/cut-types.coffee";
-import { validateMoleculeArrays } from "../../fkld/molecule.coffee";
-import { computeTheta, computeW } from "../../kirigami/model/geometry.js";
+import { KEYS } from "@fkld/spec.coffee";
+import { validateEdgeCutTypes } from "@fkld/cut-types.coffee";
+import { validateMoleculeArrays } from "@fkld/molecule.coffee";
+import { computeTheta, computeW } from "@kirigami/model/geometry.js";
 import type { FoldFile } from "../model/fold-file.js";
 import { edgeLength } from "./mesh.js";
 import {

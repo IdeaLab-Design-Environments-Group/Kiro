@@ -17,7 +17,7 @@ import {
   computeTheta,
   computeW,
   defaultInputs,
-} from "../../../src/model/geometry.js";
+} from "@kirigami/model/geometry.js";
 
 describe("model/geometry", () => {
   it("computes the canonical square-pyramid row consistently", () => {

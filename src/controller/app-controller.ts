@@ -9,7 +9,7 @@ import { type AppState, AppStore } from "../model/app-store.js";
 import { deriveFacts } from "../model/derive-facts.js";
 import { type FoldFile, isFkld } from "../model/fold-file.js";
 import { summarizeFkldForDisplay } from "../model/fkld-metadata.js";
-import { buildScene, canSimulate } from "../sim/scene.js";
+import { buildScene, canSimulate } from "../sim/index.js";
 // Transferred AKDE creation pipeline: inputs → KirigamiState → FKLD crease+cut pattern.
 import { computeState, defaultInputs } from "@kirigami/model/geometry.js";
 import { buildFkldFile } from "@kirigami/model/fkld-export.js";

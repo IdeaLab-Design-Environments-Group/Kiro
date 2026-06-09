@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeState } from "../../../src/model/geometry.js";
+import { computeState } from "@kirigami/model/geometry.js";
 import { buildFoldScene, singleHingeModel } from "../../../src/sim/build.js";
 
 describe("sim/build", () => {

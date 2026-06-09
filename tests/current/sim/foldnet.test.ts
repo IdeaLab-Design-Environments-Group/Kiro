@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeState } from "../../../src/model/geometry.js";
+import { computeState } from "@kirigami/model/geometry.js";
 import { buildFoldNet, foldNetFromMesh } from "../../../src/sim/foldnet.js";
 import { vec3 } from "../../../src/sim/vec3.js";
 
