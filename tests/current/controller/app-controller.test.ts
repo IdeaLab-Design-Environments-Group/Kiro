@@ -32,9 +32,15 @@ class MetadataPanelMock {
 
 class ViewerFrameMock {
   showCalls: Array<{ object: FoldFile; name: string }> = [];
+  private shown: { object: FoldFile; name: string } | null = null;
 
   show(object: FoldFile, name: string): void {
     this.showCalls.push({ object, name });
+    this.shown = { object, name };
+  }
+
+  current(): { object: FoldFile; name: string } | null {
+    return this.shown;
   }
 }
 
