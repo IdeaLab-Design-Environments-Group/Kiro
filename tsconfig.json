@@ -8,7 +8,21 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "isolatedModules": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@kirigami/*": ["kirigami/*"],
+      "@fkld/*": ["fkld/*"]
+    }
   },
-  "include": ["src/**/*", "vite.config.ts"]
+  "include": [
+    "src/**/*",
+    "kirigami/**/*",
+    "fkld/**/*",
+    "scripts/**/*",
+    "tests/**/*",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ]
 }

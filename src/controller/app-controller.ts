@@ -10,6 +10,9 @@ import { deriveFacts } from "../model/derive-facts.js";
 import { type FoldFile, isFkld } from "../model/fold-file.js";
 import { summarizeFkldForDisplay } from "../model/fkld-metadata.js";
 import { buildScene, canSimulate } from "../sim/scene.js";
+// Transferred AKDE creation pipeline: inputs → KirigamiState → FKLD crease+cut pattern.
+import { computeState, defaultInputs } from "@kirigami/model/geometry.js";
+import { buildFkldFile } from "@kirigami/model/fkld-export.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { MetadataPanel } from "../view/metadata-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
@@ -38,6 +41,7 @@ export class AppController {
 
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
+    this.header.onCreatePyramid(() => this.createPyramid());
     this.header.onLoadSample(() => void this.loadSample());
     this.header.onKirigamize(() => this.kirigamize());
 
@@ -95,6 +99,29 @@ export class AppController {
         "",
       );
     }
+  }
+
+  /**
+   * Generate an AKDE uniform-molecule pyramid via the **transferred creation
+   * pipeline** (`@kirigami/model`): default inputs → KirigamiState → FKLD
+   * crease+cut pattern. The result loads exactly like an imported FKLD — shown
+   * in the viewer and ready for the guided 3D Sim (its `frame_title` carries the
+   * N/L/H/T the sim recovers). This is the "creation" half of AKDE running
+   * inside the Kirigamizer shell, ahead of the general mesh→pattern pipeline.
+   */
+  createPyramid(): void {
+    const fkld = buildFkldFile(computeState(defaultInputs())) as FoldFile | null;
+    if (!fkld) {
+      this.store.setStatus("Could not create the pyramid pattern.", "bad");
+      return;
+    }
+    const name = "akde-pyramid.fkld";
+    this.applyFold(fkld, name);
+    this.viewer.show(fkld, name);
+    this.store.setStatus(
+      `Created AKDE pyramid via the transferred creation pipeline. Open 3D Sim to fold it.`,
+      "ok",
+    );
   }
 
   async loadSample(announce = true): Promise<void> {

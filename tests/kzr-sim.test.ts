@@ -12,7 +12,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildScene } from "../src/sim/scene.js";
-import type { FoldFile } from "../src/types.js";
+import type { FoldFile } from "../src/model/fold-file.js";
 
 function loadExample(name: string): FoldFile {
   const url = new URL(`../public/examples/${name}`, import.meta.url);
