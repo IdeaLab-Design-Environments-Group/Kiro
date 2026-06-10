@@ -40,8 +40,16 @@ import type { FoldScene } from "./build.js";
 
 export type { FoldScene };
 
-/** Target bounding-box size after normalization (keeps the solver dt + camera framing sane). */
-const TARGET_SIZE = 100;
+/**
+ * Target bounding-box size after normalization. ~Unit scale (AKDE's own regime:
+ * `buildFoldNet` normalizes to radius ≈ 1) — NOT 100. The explicit integrator's
+ * `computeDt` bounds only the axial mode (k_axial = EA/l0); crease stiffness is
+ * k_crease = 0.7·l0, so their ratio grows as l0² — at size-100 normalization
+ * creases were ~70× stiffer than the dt bound assumed and a free vertex with
+ * many hinges (e.g. a star apex, degree 10) went NaN. At unit scale the axial
+ * mode is the binding one, matching the solver's assumption.
+ */
+const TARGET_SIZE = 2;
 
 /** Paper-exact parameters for plain FOLD files (Fig. 5 + §2.5: ζ within [0.01, 0.5]). */
 export const ORIGAMI_PARAMS: SolverParams = { ...DEFAULT_PARAMS, zeta: 0.45 };
@@ -270,18 +278,24 @@ export function buildSceneFromFold(fold: FoldFile): FoldScene {
 /**
  * Wire AKDE's guided fold from an FKLD that carries a folded-form goal frame. Reads the
  * `foldedForm` frame's 3D `vertices_coords` (the goal mesh M0) and `fkld:vertices_driven`,
- * normalizes the goal with the *same* centroid/scale transform as the flat net, and marks the
- * driven boundary nodes (pinned, so the solver's force passes leave them where driveBoundary
- * puts them). Returns true when at least one node is driven. No-op (returns false) for plain
- * crease patterns, which keep the free-fold path.
+ * scales the goal into sim units, and **rigid-aligns it onto the rest pose** by matching the
+ * driven nodes' centroids. The flat sheet and the goal need NOT share a coordinate frame:
+ * pipeline-emitted FKLDs pack the flat pattern into sheet coordinates while the goal stays in
+ * the target's (Q's) frame — mapping the goal through the flat centroid (the old behaviour)
+ * teleported the driven boundary far from the rest pose, stretching the free vertices' beams
+ * until the explicit integrator went NaN (symptom: only boundary lines render — every face
+ * incident to the exploded free vertex vanishes). Centroid alignment is exact for the
+ * hand-made AKDE examples too (their frames already coincide, so the shift is ~0).
+ * Marks driven nodes (pinned, so force passes leave them where driveBoundary puts them).
+ * Returns true when at least one node is driven; false keeps the free-fold path.
  */
 function applyGuidedFold(
   fold: FoldFile,
   model: BarHingeModel,
   nPts: number,
-  cx: number,
-  cy: number,
-  cz: number,
+  _cx: number,
+  _cy: number,
+  _cz: number,
   scale: number,
 ): boolean {
   const f = fold as {
@@ -296,18 +310,29 @@ function applyGuidedFold(
       (fr.frame_classes ?? []).includes("foldedForm"),
   );
   if (!folded?.vertices_coords || !Array.isArray(driven)) return false;
+  if (!driven.some((d) => d)) return false;
 
-  let any = false;
+  // Centroids of the driven set: goal (mm, scaled to sim units) vs rest (already sim units).
+  let gx = 0, gy = 0, gz = 0, rx = 0, ry = 0, rz = 0, n = 0;
+  for (let i = 0; i < nPts; i++) {
+    if (!driven[i]) continue;
+    const g = folded.vertices_coords[i] ?? [0, 0, 0];
+    gx += (g[0] ?? 0) * scale; gy += (g[1] ?? 0) * scale; gz += (g[2] ?? 0) * scale;
+    rx += model.rest[3 * i]; ry += model.rest[3 * i + 1]; rz += model.rest[3 * i + 2];
+    n++;
+  }
+  // Translation that brings the goal's driven centroid onto the rest pose's.
+  const tx = rx / n - gx / n, ty = ry / n - gy / n, tz = rz / n - gz / n;
+
   for (let i = 0; i < nPts; i++) {
     const g = folded.vertices_coords[i] ?? [0, 0, 0];
-    model.goal[3 * i] = ((g[0] ?? 0) - cx) * scale;
-    model.goal[3 * i + 1] = ((g[1] ?? 0) - cy) * scale;
-    model.goal[3 * i + 2] = ((g[2] ?? 0) - cz) * scale;
+    model.goal[3 * i] = (g[0] ?? 0) * scale + tx;
+    model.goal[3 * i + 1] = (g[1] ?? 0) * scale + ty;
+    model.goal[3 * i + 2] = (g[2] ?? 0) * scale + tz;
     if (driven[i]) {
       model.driven[i] = 1;
       model.fixed[i] = 1;
-      any = true;
     }
   }
-  return any;
+  return true;
 }

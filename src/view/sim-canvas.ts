@@ -161,9 +161,8 @@ export class SimCanvas {
       );
     }
 
-    // Guided pyramid → GPU (Gershenfeld GPGPU); free fold → CPU. Both run the per-node quick-min
-    // quench (gpu.quench defaults on; cpu.quench enabled here), so a frustrated kirigami mesh
-    // settles to a still rest on either backend instead of jittering.
+    // Guided pyramid → GPU (Gershenfeld GPGPU); free fold → CPU. Settling is applied at the target
+    // (advance): the GPU global quench via gpu.relax(), the CPU via kineticDamp.
     this.gpu = this.guided ? GpuFoldSolver.create(model, this.renderer) : null;
     this.cpu = this.gpu ? null : scene.solver;
 
