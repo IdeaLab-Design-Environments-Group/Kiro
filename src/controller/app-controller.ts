@@ -15,11 +15,13 @@ import { statusFromError } from "../core/errors.js";
 import { loadedStatus, readModelFile, fetchSample } from "../services/model-loader.js";
 import { kirigamizeMesh, createAkdePyramid } from "../services/pattern-service.js";
 import { resolveSimScene } from "../services/sim-scene-service.js";
+import { resolveSvgExport } from "../services/svg-export-service.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { MetadataPanel } from "../view/metadata-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
 import type { HeaderActions } from "../view/header-actions.js";
 import type { SimModal } from "../view/sim-modal.js";
+import type { ExportModal } from "../view/export-modal.js";
 
 const SAMPLE_URL = "./examples/akde-hex.fkld";
 const SAMPLE_NAME = "akde-hex.fkld";
@@ -32,12 +34,19 @@ export class AppController {
     private readonly viewer: ViewerFrame,
     private readonly header: HeaderActions,
     private readonly sim: SimModal,
+    private readonly exporter: ExportModal,
   ) {
     // 3D Sim folds exactly what the VIEWER is showing (fall back to the loaded model). This keeps
     // "what you see is what gets simulated" true even when the viewer and the convert panel differ.
     this.sim.setProvider(() => {
       const { model, viewerShown } = this.store.getState();
       return resolveSimScene(model, viewerShown);
+    });
+
+    // SVG export targets the same source — "what you see is what you cut" (black=cut, blue=score).
+    this.exporter.setProvider(() => {
+      const { model, viewerShown } = this.store.getState();
+      return resolveSvgExport(model, viewerShown);
     });
 
     // The viewer can load models on its own (file picker, example dropdown, drag-drop); record
@@ -67,6 +76,8 @@ export class AppController {
     // consistently from state.)
     const simObject = state.viewerShown?.object ?? (m?.kind === "fold" ? m.object : null);
     this.sim.setEnabled(!!simObject && canSimulate(simObject));
+    // Export is available for any displayed FKLD/FOLD pattern (even non-simulable ones).
+    this.exporter.setEnabled(!!simObject);
   }
 
   // ---- intents (each: a service call + a store update) ---------------------

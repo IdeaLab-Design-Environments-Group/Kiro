@@ -93,6 +93,21 @@ class SimModalMock {
   }
 }
 
+type ExportProviderFn = () => unknown;
+
+class ExportModalMock {
+  provider: ExportProviderFn | null = null;
+  enabledCalls: boolean[] = [];
+
+  setProvider(provider: ExportProviderFn): void {
+    this.provider = provider;
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabledCalls.push(enabled);
+  }
+}
+
 function makeFold(overrides: Partial<FoldFile> = {}): FoldFile {
   return {
     vertices_coords: [
@@ -117,6 +132,7 @@ function setup() {
   const viewer = new ViewerFrameMock();
   const header = new HeaderActionsMock();
   const sim = new SimModalMock();
+  const exporter = new ExportModalMock();
   const controller = new AppController(
     store,
     convert as never,
@@ -124,8 +140,9 @@ function setup() {
     viewer as never,
     header as never,
     sim as never,
+    exporter as never,
   );
-  return { controller, store, convert, metadata, viewer, header, sim };
+  return { controller, store, convert, metadata, viewer, header, sim, exporter };
 }
 
 describe("controller/app-controller", () => {

@@ -17,6 +17,7 @@ import { MetadataPanel } from "./view/metadata-panel.js";
 import { ViewerFrame } from "./view/viewer-frame.js";
 import { HeaderActions } from "./view/header-actions.js";
 import { SimModal } from "./view/sim-modal.js";
+import { ExportModal } from "./view/export-modal.js";
 import { AppController } from "./controller/app-controller.js";
 
 const app = document.getElementById("app");
@@ -32,13 +33,15 @@ const viewer = new ViewerFrame();
 app.append(convert.element, metadata.element, viewer.element);
 
 const simModal = new SimModal();
+const exportModal = new ExportModal();
 const header = new HeaderActions();
 simModal.mountTrigger(header.element); // 3D Sim trigger first…
-header.appendActionButtons(); // …then Load sample + Kirigamize ▶
+exportModal.mountTrigger(header.element); // …then Export SVG…
+header.appendActionButtons(); // …then Create / Load sample / Kirigamize ▶
 document.querySelector(".app-header")?.appendChild(header.element);
 
 // ---- Controller -----------------------------------------------------------
-const controller = new AppController(store, convert, metadata, viewer, header, simModal);
+const controller = new AppController(store, convert, metadata, viewer, header, simModal, exportModal);
 
 // Default state: load the bundled FKLD example so the panels, viewer, and 3D
 // Sim are all live on first paint (no-op under file:// where fetch is blocked).
