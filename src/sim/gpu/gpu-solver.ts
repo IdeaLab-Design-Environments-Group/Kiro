@@ -18,6 +18,8 @@ import { POSITION_SHADER, VELOCITY_SHADER } from "./shaders.js";
 export class GpuFoldSolver {
   readonly dt: number;
   foldPercent = 0;
+  /** Per-node quick-min relaxation: drives the frustrated kirigami interior to a still rest. */
+  quench = true;
   private readonly gpu: GPUComputationRenderer;
   private readonly posVar: ReturnType<GPUComputationRenderer["addVariable"]>;
   private readonly velVar: ReturnType<GPUComputationRenderer["addVariable"]>;
@@ -78,6 +80,7 @@ export class GpuFoldSolver {
       uDt: { value: this.dt },
       uFoldPercent: { value: 0 },
       uKFace: { value: model.params.kFace },
+      uQuench: { value: 1 },
     };
     for (const variable of [posVar, velVar]) {
       Object.assign((variable.material as THREE.ShaderMaterial).uniforms, structuredCloneUniforms(shared));
@@ -102,6 +105,7 @@ export class GpuFoldSolver {
     for (const variable of [this.posVar, this.velVar]) {
       const u = (variable.material as THREE.ShaderMaterial).uniforms;
       if (u.uFoldPercent) u.uFoldPercent.value = this.foldPercent;
+      if (u.uQuench) u.uQuench.value = this.quench ? 1 : 0;
     }
     for (let i = 0; i < n; i++) this.gpu.compute();
   }

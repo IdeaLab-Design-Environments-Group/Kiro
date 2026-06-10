@@ -1,18 +1,23 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldScene, FoldSolver } from "../sim/index.js";
-import { dampVelocity, kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
+import { dampVelocity, removeRigidBodyMotion } from "../sim/index.js";
+import { GpuFoldSolver } from "../sim/gpu/index.js";
 
 /**
  * Three.js viewport for the forward fold — renders the FoldNet as lit triangle faces plus
- * mountain/valley/boundary/cut lines, driving the GPU bar-and-hinge solver (`GpuFoldSolver`),
- * falling back to the CPU `FoldSolver`.
+ * mountain/valley/boundary/cut lines, driving the GPU bar-and-hinge solver (`GpuFoldSolver`,
+ * Gershenfeld GPGPU), falling back to the CPU `FoldSolver`.
  *
- * Anti-twitch: the fold eases to the target, then the mesh is held under smooth viscous damping
- * (no jerky kinetic quench) until it stops moving — detected by the per-frame max position change
- * dropping below a scale-relative threshold — at which point stepping **freezes** so the pose is
- * dead still (the only reliably motionless state for a frustrated mesh). A hard frame cap freezes
- * it regardless, so it can never twitch forever.
+ * Anti-twitch (model-level): Gershenfeld's integrator is extended with a **per-node quick-min
+ * relaxation** for the concrete kirigami fold — once a node's velocity opposes its net force it has
+ * overshot its local force balance, so the velocity is zeroed (see `integrate` / the GPU
+ * VELOCITY_SHADER). A frustrated kirigami mesh (cut-induced floppy DOF + a driven boundary) has no
+ * force-balanced state reachable by plain viscous damping, which only orbits a limit cycle forever;
+ * quick-min descends it to a TRUE static rest. It runs on BOTH backends (`gpu.quench` /
+ * `cpu.quench`), so the GPU path — where JS-side damping was a no-op (velocity lives on-device) —
+ * finally settles. When the per-frame max node motion stays below a scale-relative threshold the
+ * view **freezes** (stops stepping); a hard frame cap freezes it regardless.
  *
  * Anti-overlap: the camera near/far planes are tightened to the model scale each load, so the depth
  * buffer has enough precision that coincident folded faces don't z-fight (flicker through each other).
@@ -28,7 +33,7 @@ const STEPS_PER_FRAME = 40;
 const FOLD_EASE = 0.05;
 /** Free mode: gentler per-step easing toward the target. */
 const FREE_PER_STEP_EASE = 0.014;
-/** Free mode: per-step viscous velocity bleed (smooth settle, no jerk). */
+/** Free mode: per-step viscous velocity bleed (keeps an un-driven mesh stable while quick-min settles it). */
 const FREE_VELOCITY_DAMP = 0.9;
 /** |targetFold − foldPercent| below this counts as "at the target fold". */
 const FOLD_REACHED_EPS = 1e-3;
@@ -47,6 +52,7 @@ export class SimCanvas {
   private readonly group = new THREE.Group();
 
   private fold: FoldScene | null = null;
+  private gpu: GpuFoldSolver | null = null;
   private cpu: FoldSolver | null = null;
   private geo: THREE.BufferGeometry | null = null;
   private posAttr: THREE.BufferAttribute | null = null;
@@ -63,8 +69,6 @@ export class SimCanvas {
   private framesAtTarget = 0;
   /** Max per-frame node motion (model units) below which the fold counts as still. */
   private settleEps = 1e-3;
-  /** Kinetic-energy tracker for the Otter quench used in the at-target settle phase. */
-  private prevKE = Infinity;
 
   constructor(container: HTMLElement) {
     const w = container.clientWidth || 480;
@@ -107,7 +111,6 @@ export class SimCanvas {
     this.frozen = false;
     this.settledFrames = 0;
     this.framesAtTarget = 0;
-    this.prevKE = Infinity;
     this.prevPos = model.position.slice();
 
     this.posAttr = new THREE.BufferAttribute(model.position, 3);
@@ -157,12 +160,12 @@ export class SimCanvas {
       );
     }
 
-    // CPU solver for ALL folds. The settle passes (viscous damp / Otter quench / rigid-removal)
-    // act on the CPU model.velocity; the GPU path keeps its velocity on-device and only reads
-    // positions back, so those passes were a no-op there and the guided pyramid could never be
-    // driven to a still rest (it limit-cycled until the freeze cap → the "still jitters" bug).
-    // These meshes are small enough for 40 CPU steps/frame.
-    this.cpu = scene.solver;
+    // Guided pyramid → GPU (Gershenfeld GPGPU); free fold → CPU. Both run the per-node quick-min
+    // quench (gpu.quench defaults on; cpu.quench enabled here), so a frustrated kirigami mesh
+    // settles to a still rest on either backend instead of jittering.
+    this.gpu = this.guided ? GpuFoldSolver.create(model, this.renderer) : null;
+    this.cpu = this.gpu ? null : scene.solver;
+    if (this.cpu) this.cpu.quench = true;
 
     // Frame the model AND tighten the depth range to its scale — a near/far ratio of ~250:1 instead
     // of 40000:1 gives the depth buffer the precision to stop coincident folded faces z-fighting.
@@ -177,8 +180,8 @@ export class SimCanvas {
   }
 
   /** Active solver backend, for status display. */
-  backend(): "cpu" | "none" {
-    return this.cpu ? "cpu" : "none";
+  backend(): "gpu" | "cpu" | "none" {
+    return this.gpu ? "gpu" : this.cpu ? "cpu" : "none";
   }
 
   setFoldPercent(p: number): void {
@@ -186,7 +189,6 @@ export class SimCanvas {
     this.frozen = false; // scrubbing wakes a frozen fold
     this.settledFrames = 0;
     this.framesAtTarget = 0;
-    this.prevKE = Infinity;
     this.prevPos = this.fold?.model.position.slice() ?? null; // restart the settle test from here
   }
 
@@ -219,18 +221,26 @@ export class SimCanvas {
   }
 
   private advance(): void {
-    if (!this.fold || this.frozen || !this.cpu) return; // frozen: hold the pose, orbit only
+    if (!this.fold || this.frozen) return; // frozen: hold the pose, orbit only
     const m = this.fold.model;
 
-    // --- 1. Drive the fold (smooth) ------------------------------------------------------------
-    // Guided: ease the driven boundary once per frame. Free: ease the crease targets per step and
-    // bleed velocity viscously + remove rigid drift (an un-driven mesh needs that to stay stable).
     if (this.guided) {
+      // Ease the driven boundary per frame; the solver (GPU or CPU) runs quick-min, so the interior
+      // relaxes to rest as the shape forms.
       this.foldPercent += (this.targetFold - this.foldPercent) * FOLD_EASE;
       if (Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS) this.foldPercent = this.targetFold;
-      this.cpu.foldPercent = this.foldPercent;
-      for (let i = 0; i < STEPS_PER_FRAME; i++) this.cpu.step();
-    } else {
+      const fp = this.foldPercent;
+      if (this.gpu) {
+        this.gpu.foldPercent = fp;
+        this.gpu.step(STEPS_PER_FRAME);
+        this.gpu.readInto(m);
+      } else if (this.cpu) {
+        this.cpu.foldPercent = fp;
+        for (let i = 0; i < STEPS_PER_FRAME; i++) this.cpu.step();
+      }
+    } else if (this.cpu) {
+      // Free (Neil's normal origami) fold: ease crease targets per step; viscous bleed + rigid
+      // removal keep an un-driven mesh stable while quick-min (cpu.quench) settles it.
       for (let i = 0; i < STEPS_PER_FRAME; i++) {
         this.foldPercent += (this.targetFold - this.foldPercent) * FREE_PER_STEP_EASE;
         this.cpu.foldPercent = this.foldPercent;
@@ -241,18 +251,6 @@ export class SimCanvas {
       if (Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS) this.foldPercent = this.targetFold;
     }
 
-    // --- 2. Settle (only once the shape is reached) -------------------------------------------
-    // With the boundary now static, drain the frustrated interior to a TRUE rest. Plain viscous
-    // damping only asymptotes to a limit cycle (it never reaches zero → endless twitch); the Otter
-    // quench zeros velocity each time kinetic energy stops rising, descending to a static minimum.
-    // We only quench here (not during the fold) so the fold animation itself stays smooth.
-    if (this.foldPercent === this.targetFold) {
-      this.prevKE = kineticDamp(m, this.prevKE);
-      removeRigidBodyMotion(m);
-    } else {
-      this.prevKE = Infinity;
-    }
-
     this.flushGeometry();
     this.maybeFreeze();
   }
@@ -260,8 +258,8 @@ export class SimCanvas {
   /**
    * Freeze once the fold has reached the target AND the mesh has stopped moving (max per-frame node
    * displacement below `settleEps` for `SETTLE_FRAMES` frames), or after a hard frame cap. Freezing
-   * stops all stepping, so the held pose is perfectly still — the cure for the residual twitch an
-   * explicit integrator leaves on a frustrated mesh.
+   * stops all stepping, so the held pose is perfectly still. With the per-node quick-min quench the
+   * mesh actually reaches rest, so this fires quickly instead of bottoming out at the cap.
    */
   private maybeFreeze(): void {
     const pos = this.fold!.model.position;
@@ -288,8 +286,6 @@ export class SimCanvas {
     else this.settledFrames = 0;
 
     if (this.settledFrames >= SETTLE_FRAMES || this.framesAtTarget >= MAX_SETTLE_FRAMES) {
-      this.fold!.model.velocity.fill(0); // final quench so the held pose has zero motion
-      this.flushGeometry();
       this.frozen = true;
     }
   }
@@ -312,6 +308,7 @@ export class SimCanvas {
     this.geo?.dispose();
     this.geo = null;
     this.posAttr = null;
+    this.gpu = null;
     this.cpu = null;
   }
 }

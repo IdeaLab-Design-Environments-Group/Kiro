@@ -62,6 +62,8 @@ export class FoldSolver {
   /** Persistent per-crease fold angle, unwrapped across steps. */
   readonly theta: Float32Array;
   foldPercent = 0;
+  /** Per-node quick-min relaxation (kirigami settle). Off by default = original integrator. */
+  quench = false;
 
   constructor(readonly model: BarHingeModel) {
     this.dt = computeDt(model);
@@ -74,7 +76,7 @@ export class FoldSolver {
     computeFaceNormals(this.model);
     computeThetas(this.model, this.theta);
     accumulateForces(this.model, this.theta, this.foldPercent);
-    integrate(this.model, this.dt);
+    integrate(this.model, this.dt, this.quench);
   }
 
   /**

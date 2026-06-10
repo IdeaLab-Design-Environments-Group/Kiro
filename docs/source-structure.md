@@ -13,13 +13,18 @@ src/
   styles.css
   controller/
     app-controller.ts
+  core/
+    errors.ts
+    vec3.ts
+  services/
+    model-loader.ts
+    pattern-service.ts
+    sim-scene-service.ts
   model/
     app-store.ts
     derive-facts.ts
     fkld-metadata.ts
     fold-file.ts
-    geometry.ts
-    types.ts
   pipeline/
     conditioning.ts
     curvature.ts
@@ -40,6 +45,7 @@ src/
     forces.ts
     gpu/
       gpu-solver.ts
+      index.ts
       pack.ts
       shaders.ts
     index.ts
@@ -76,17 +82,39 @@ src/
 
 Responsibilities:
 
-- Register view callbacks.
-- Read dropped/selected files.
-- Parse FOLD/FKLD JSON.
-- Route mesh inputs to the future pipeline.
-- Update `AppStore`.
-- Push derived render data into views when state changes.
-- Send FOLD/FKLD objects to `ViewerFrame`.
-- Provide simulation scenes to `SimModal`.
+- Register view callbacks and route each intent to a **service**.
+- Update `AppStore` with service results (or `AppError` statuses).
+- Push derived render data into views when state changes (single `render`).
+- Send FOLD/FKLD objects to `ViewerFrame`; record `viewerShown` from it.
+- Provide simulation scenes to `SimModal` via `services/sim-scene-service`.
 
 It is intentionally the only app layer that imports both model and view
-classes.
+classes. Use-case logic does NOT belong here — it lives in `src/services/`.
+
+## Core
+
+`src/core/` — dependency-free shared code (imports nothing from other layers).
+
+| File | Responsibility |
+| --- | --- |
+| `vec3.ts` | Plain `{x,y,z}` vector math shared by sim/ and pipeline/ (`sim/vec3.ts` re-exports it). |
+| `errors.ts` | `AppError` (domain-tagged) + `toAppError` + `statusFromError` — the app-wide error vocabulary. |
+
+## Services
+
+`src/services/` — stateless use-case logic between controller and domains.
+New features land here, not in the controller.
+
+| File | Responsibility |
+| --- | --- |
+| `model-loader.ts` | Text→`LoadedModel` parsing, FileReader IO (callback-style by design), sample fetching, loaded-status strings. |
+| `pattern-service.ts` | Single facade over BOTH creation paths — the M1–M5 pipeline (`kirigamizeMesh`) and the AKDE creation pipeline (`createAkdePyramid`) — returning a narrow `PatternOutcome`. |
+| `sim-scene-service.ts` | `resolveSimScene(model, shown)` — pure policy for what the 3D Sim folds. |
+
+Rules:
+
+- No view/ or controller/ imports.
+- Stateless: services take inputs, return data or throw `AppError`.
 
 ## Model
 
@@ -94,12 +122,15 @@ classes.
 
 | File | Responsibility |
 | --- | --- |
-| `app-store.ts` | Observable UI state: loaded model and status. |
+| `app-store.ts` | Observable UI state: loaded model, status, and `viewerShown` (what the viewer iframe displays). |
 | `fold-file.ts` | Minimal FOLD/FKLD types and `isFkld`. |
 | `derive-facts.ts` | Loaded model to Derived panel rows. |
 | `fkld-metadata.ts` | FOLD/FKLD object to metadata panel sections. |
-| `geometry.ts` | AKDE/kirigami scalar geometry calculations. |
-| `types.ts` | Kirigami input/derived/domain types. |
+
+Kirigami geometry/types (`KirigamiState`, `computeState`, …) live in
+`@kirigami/model` — the single source of truth. The former `src/model/types.ts`
+and `src/model/geometry.ts` duplicates were deleted (architecture-test rule R5
+keeps them from reappearing).
 
 Rules:
 
@@ -164,7 +195,7 @@ Rules:
 
 | File | Responsibility |
 | --- | --- |
-| `vec3.ts` | Vector helpers. |
+| `vec3.ts` | Compatibility re-export of `core/vec3.ts` (the shared math). |
 | `foldnet.ts` | FoldNet topology from AKDE/generic meshes. |
 | `model.ts` | `BarHingeModel` struct-of-arrays assembly. |
 | `forces.ts` | CPU force math and timestep calculation. |
@@ -176,7 +207,8 @@ Rules:
 | `gpu/pack.ts` | Pack model into GPU textures. |
 | `gpu/shaders.ts` | GLSL force/integration shaders. |
 | `gpu/gpu-solver.ts` | Three.js GPU computation wrapper. |
-| `index.ts` | Public simulation exports. |
+| `gpu/index.ts` | Browser-only GPU barrel — the only sanctioned GPU entry point. |
+| `index.ts` | Public Node-safe simulation exports (never re-exports gpu/ or anything importing `three`). |
 
 Rules:
 
@@ -184,6 +216,8 @@ Rules:
 - Rendering belongs in `src/view/sim-canvas.ts`.
 - CPU solver is the reference path.
 - GPU solver is an acceleration path.
+- Consumers outside `src/sim/` import only via `sim/index.js` (Node-safe) or
+  `sim/gpu/index.js` (browser) — enforced by architecture-test rule R3.
 
 ## Styling
 

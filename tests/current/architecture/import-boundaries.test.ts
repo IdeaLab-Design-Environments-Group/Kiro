@@ -152,4 +152,61 @@ describe("architecture: import boundaries (docs/import-boundaries.md)", () => {
     );
     expect(bad, bad.join("\n")).toEqual([]);
   });
+
+  it("R8: full layering matrix — no layer imports a layer above it", () => {
+    // Allowed direction: main → controller → services → {model, pipeline, sim, core}.
+    // FORBIDDEN[layer] = src prefixes that layer must never resolve an import into.
+    const FORBIDDEN: Record<string, string[]> = {
+      "model/": ["view/", "controller/", "services/", "pipeline/", "sim/"],
+      "pipeline/": ["view/", "controller/", "services/", "model/app-store"],
+      "sim/": ["view/", "controller/", "services/", "pipeline/"],
+      "view/": ["controller/", "services/", "pipeline/"],
+      "services/": ["view/", "controller/"],
+      "core/": ["view/", "controller/", "services/", "model/", "pipeline/", "sim/"],
+    };
+    const bad: string[] = [];
+    for (const e of edges) {
+      if (e.resolved === null) continue;
+      for (const [layer, forbidden] of Object.entries(FORBIDDEN)) {
+        if (!e.file.startsWith(layer)) continue;
+        if (forbidden.some((f) => e.resolved!.startsWith(f))) bad.push(`${e.file} → ${e.spec}`);
+      }
+    }
+    expect(bad, bad.join("\n")).toEqual([]);
+  });
+
+  it("R9: Node-safety — the transitive closure of sim/index.ts and pipeline/index.ts never imports three", () => {
+    // vitest imports these barrels in plain Node; any `three` anywhere in their
+    // transitive import graph would break that (and the GPU/browser split).
+    const bySrcPath = new Map<string, ImportEdge[]>();
+    for (const e of edges) {
+      const list = bySrcPath.get(e.file) ?? [];
+      list.push(e);
+      bySrcPath.set(e.file, list);
+    }
+    /** Resolve a src-relative .js specifier to the .ts file key used in `edges`. */
+    const toTs = (resolved: string): string => resolved.replace(/\.js$/, ".ts");
+    const closureHasThree = (entry: string): string[] => {
+      const seen = new Set<string>();
+      const queue = [entry];
+      const offenders: string[] = [];
+      while (queue.length > 0) {
+        const file = queue.pop()!;
+        if (seen.has(file)) continue;
+        seen.add(file);
+        for (const e of bySrcPath.get(file) ?? []) {
+          if (e.spec === "three" || e.spec.startsWith("three/")) offenders.push(`${file} → ${e.spec}`);
+          if (e.resolved !== null) {
+            const next = toTs(e.resolved);
+            if (bySrcPath.has(next)) queue.push(next);
+          }
+        }
+      }
+      return offenders;
+    };
+    for (const entry of ["sim/index.ts", "pipeline/index.ts"]) {
+      const offenders = closureHasThree(entry);
+      expect(offenders, `${entry} closure: ${offenders.join(", ")}`).toEqual([]);
+    }
+  });
 });

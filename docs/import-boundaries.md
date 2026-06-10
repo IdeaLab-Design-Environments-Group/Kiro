@@ -13,37 +13,47 @@ test and this document in the same change.
 ```text
 main
   -> controller
-  -> model
-  -> pipeline
-  -> sim
-  -> view
+       -> services
+            -> {model, pipeline, sim, @kirigami, @fkld, core}
+  -> view  (model types + sim barrels only)
+core -> nothing
 ```
 
 The actual dependency shape is:
 
 ```text
 src/main.ts
-  imports model + view + controller
+  imports model + view + controller (composition root only)
 
 src/controller/
-  imports model + view + sim scene selection + pipeline facade when needed
+  imports model + view + services + core errors
+  thin: wiring + the single render(state) path — use-case logic lives in services
+
+src/services/
+  stateless use-case logic (model-loader, pattern-service, sim-scene-service)
+  imports model + pipeline + sim barrel + @kirigami + @fkld + core
+  never imports view/ or controller/
 
 src/view/
   imports model types/presenter result types
-  imports sim scene/solver APIs only for simulation rendering
+  imports sim APIs only via the barrels (sim/index.js, sim/gpu/index.js)
+  never imports services/ or controller/ — intents flow up via callbacks
 
 src/model/
-  imports no view/controller
-  may import shared types only
+  imports no view/controller/services/pipeline/sim
+  may import shared types and core only
 
 src/pipeline/
   imports model FoldFile type where FKLD emission/verification needs it
-  imports sim math/adapter only at verification boundaries
-  imports no view/controller
+  imports sim ONLY via sim/index.js (verification boundary)
+  imports core (vec3, errors); no view/controller/services
 
 src/sim/
-  imports model geometry/types only for AKDE scene construction
-  imports no view/controller
+  imports @kirigami/model geometry/types for AKDE scene construction
+  imports core (vec3); no view/controller/services/pipeline
+
+src/core/
+  imports nothing from other layers (vec3 math, AppError vocabulary)
 ```
 
 ## Explicitly Forbidden
@@ -83,20 +93,26 @@ Document any new exception in this file **and** in the architecture test.
 
 ## Quick Audit Commands
 
-Run these before large refactors:
+The audit is automated — run:
 
 ```sh
-rg "../view|./view" src/model src/pipeline src/sim
-rg "../controller|./controller" src/model src/pipeline src/sim src/view
-rg "document|window|HTMLElement|HTMLCanvasElement|FileReader" src/model src/pipeline
-rg "AppStore" src/view src/model src/pipeline src/sim
+npx vitest run tests/current/architecture
 ```
 
-Expected notes:
+Rules enforced (R1–R9): three.js containment; @kirigami/@fkld alias-only
+access; sim barrel-only access; core isolation; no geometry re-duplication;
+services/view layering; the full layering matrix; and a transitive
+**Node-safety walk** (the import closure of `sim/index.ts` and
+`pipeline/index.ts` must never reach `three` — that is what keeps them
+importable under plain-Node vitest).
 
-- `src/view/*` will naturally use DOM types.
-- `src/controller/*` will naturally use `FileReader`.
-- `src/sim/gpu/*` may use Three.js/WebGL infrastructure.
+Sanctioned exceptions:
+
+- `src/view/sim-canvas.ts` may import `src/sim/gpu/index.js` (the browser-only
+  GPU barrel) — it is the rendering layer.
+- `src/services/model-loader.ts` uses `FileReader` — it performs file IO on
+  behalf of the controller (callback-style by design; tests stub FileReader).
+- `src/view/*` naturally uses DOM types; `src/sim/gpu/*` uses Three.js/WebGL.
 
 ## Barrel Files
 

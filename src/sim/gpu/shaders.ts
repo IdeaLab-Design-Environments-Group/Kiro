@@ -32,6 +32,7 @@ const COMMON = /* glsl */ `
   uniform float uDt;
   uniform float uFoldPercent;
   uniform float uKFace;
+  uniform float uQuench;         // >0.5 ⇒ per-node quick-min relaxation (kirigami settle)
 
   vec4 fetch(sampler2D t, float i, vec2 dim){
     float c = mod(i, dim.x);
@@ -139,6 +140,10 @@ export const VELOCITY_SHADER = /* glsl */ `
     if (m.y > 0.5) { gl_FragColor = vec4(0.0); return; } // fixed
     vec3 f = computeForce(self);
     v += (f / m.x) * uDt;
+    // per-node quick-min relaxation (kirigami settle): once the new velocity opposes the net force
+    // the node has overshot its local force balance, so kill it — this descends a frustrated mesh
+    // to a TRUE static rest (plain viscous ζ only asymptotes to a limit cycle ⇒ the GPU jitter).
+    if (uQuench > 0.5 && dot(v, f) < 0.0) v = vec3(0.0);
     gl_FragColor = vec4(v, 0.0);
   }
 `;
@@ -165,6 +170,7 @@ export const POSITION_SHADER = /* glsl */ `
     vec3 v = texture2D(textureVelocity, uv).xyz;
     vec3 f = computeForce(self);
     vec3 vNew = v + (f / m.x) * uDt;
+    if (uQuench > 0.5 && dot(vNew, f) < 0.0) vNew = vec3(0.0); // match the velocity shader's quick-min
     p += vNew * uDt;
     gl_FragColor = vec4(p, 0.0);
   }
