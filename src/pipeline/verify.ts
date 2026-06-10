@@ -184,20 +184,29 @@ export function verifyFold(
     guard: true,
   });
 
-  // --- reconstruct the fold-adapter transform (flat bbox centroid + scale) --
-  const raw = fkld.vertices_coords as number[][];
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  for (const c of raw) {
-    const [x, y, z] = [c[0] ?? 0, c[1] ?? 0, c[2] ?? 0];
-    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-    minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
-  }
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const cz = (minZ + maxZ) / 2;
+  // --- the mm → sim map, derived from the model itself (closes risk R8) ------
+  // applyGuidedFold maps the goal frame by sim = mm·scale + t, where t is
+  // whatever alignment policy the adapter uses (it has already changed once,
+  // from flat-bbox centering to driven-centroid alignment). Rather than
+  // reconstructing the policy, recover t directly from the (goal_mm,
+  // model.goal_sim) pairs the model already holds — exact for any policy.
   const scale = scene.net.meta.scale;
+  const frames = fkld.file_frames as
+    | { frame_classes?: string[]; vertices_coords?: number[][] }[]
+    | undefined;
+  const goalMm = frames?.find((fr) => (fr.frame_classes ?? []).includes("foldedForm"))?.vertices_coords;
+  if (!goalMm || goalMm.length === 0) {
+    throw new PipelineError("verify", "fkld lacks a foldedForm goal frame — emit must run first");
+  }
+  let tx = 0, ty = 0, tz = 0;
+  for (let i = 0; i < goalMm.length; i++) {
+    tx += scene.model.goal[3 * i] - (goalMm[i][0] ?? 0) * scale;
+    ty += scene.model.goal[3 * i + 1] - (goalMm[i][1] ?? 0) * scale;
+    tz += scene.model.goal[3 * i + 2] - (goalMm[i][2] ?? 0) * scale;
+  }
+  tx /= goalMm.length;
+  ty /= goalMm.length;
+  tz /= goalMm.length;
 
   // --- folded sheet in sim space ---------------------------------------------
   const pos = scene.model.position;
@@ -213,9 +222,9 @@ export function verifyFold(
   }
   const folded: SampledMesh = { v: foldedV, f: scene.net.faces };
 
-  // --- Q in sim space ---------------------------------------------------------
+  // --- Q in sim space (same map) ----------------------------------------------
   const targetSim: SampledMesh = {
-    v: target.vertices.map((p) => ({ x: (p.x - cx) * scale, y: (p.y - cy) * scale, z: (p.z - cz) * scale })),
+    v: target.vertices.map((p) => ({ x: p.x * scale + tx, y: p.y * scale + ty, z: p.z * scale + tz })),
     f: target.faces,
   };
 

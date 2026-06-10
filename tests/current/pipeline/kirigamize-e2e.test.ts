@@ -7,9 +7,9 @@
  * v1 verifies equilibrium rather than the fold path.
  */
 import { describe, expect, it } from "vitest";
-import { kirigamize } from "../../../src/pipeline/kirigamize.js";
+import { kirigamize, kirigamizeText } from "../../../src/pipeline/kirigamize.js";
 import { PipelineError } from "../../../src/pipeline/types.js";
-import { makeCube, makeEnneper, makeOctahedron, makeSaddleRoof, makeTent } from "./fixtures/targets.js";
+import { makeCube, makeEnneper, makeOctahedron, makeSaddleRoof, makeTent, toAsciiStl, makePyramid } from "./fixtures/targets.js";
 
 const E2E = { timeout: 120_000 };
 
@@ -49,6 +49,46 @@ describe("kirigamize end-to-end (sim as oracle)", () => {
     expect(r.freeVertices).toBeGreaterThan(0); // the solver really relaxes these
     expect(r.converged, `dH=${r.dH.toFixed(3)}mm strain=${r.meanStrain} res=${r.creaseResidual}`).toBe(true);
     expect(r.dHRel).toBeLessThanOrEqual(0.05);
+  });
+
+  it("closed pyramid via STL text: minimal cuts and verified (frame-map regression)", E2E, () => {
+    // Closed square pyramid, base at 0..L (deliberately NOT origin-centered —
+    // this is the case where verify's old flat-bbox frame reconstruction
+    // diverged from the adapter's driven-centroid alignment and reported
+    // d_H ≈ 1.3 bbox diagonals on a perfect fold).
+    const L = 100;
+    const H = 70.7;
+    const A = { x: L / 2, y: L / 2, z: H };
+    const c = [
+      { x: 0, y: 0, z: 0 },
+      { x: L, y: 0, z: 0 },
+      { x: L, y: L, z: 0 },
+      { x: 0, y: L, z: 0 },
+    ];
+    const closed = {
+      vertices: [c[0], c[1], c[2], c[3], A],
+      faces: [
+        [0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4], // lateral
+        [0, 2, 1], [0, 3, 2], // base
+      ] as [number, number, number][],
+    };
+    const result = kirigamizeText(toAsciiStl(closed), "stl", { verify: true });
+    const r = result.report!;
+    // CUT MINIMALITY: 5 defect vertices on a closed solid need a spanning
+    // tree — exactly V−1 = 4 cut edges, and no relief cuts on this target.
+    expect(result.plan.cutEdges.length).toBe(4);
+    expect(result.unfold.reliefEdges.length).toBe(0);
+    expect(result.sheet.faces.length).toBe(6);
+    expect(r.converged, `dH=${r.dH.toFixed(3)}mm ε=${r.epsilon.toFixed(3)}mm strain=${r.meanStrain}`).toBe(true);
+    expect(r.dHRel).toBeLessThanOrEqual(0.05);
+    expect(r.attempts).toBe(1); // no retries needed — a correct pattern verifies first try
+  });
+
+  it("open pyramid: a single slit to the boundary, nothing more", E2E, () => {
+    const result = kirigamize(makePyramid(4, 50, 30), { verify: true });
+    expect(result.plan.cutEdges.length).toBe(1); // apex dart: shortest path to ∂Q
+    expect(result.unfold.reliefEdges.length).toBe(0);
+    expect(result.report!.converged).toBe(true);
   });
 
   it("tuck-all on a non-developable target throws the honest deferral error", () => {
