@@ -39,8 +39,8 @@ const FOLD_REACHED_EPS = 1e-3;
 const SETTLE_FRAMES = 10;
 /** Settle threshold = SETTLE_REL · camera reach (scale-relative so it works at any model size). */
 const SETTLE_REL = 4e-4;
-/** Hard cap: freeze this many frames after reaching the target even if it never fully settles. */
-const MAX_SETTLE_FRAMES = 600;
+/** Hard cap: freeze this many frames after reaching the target even if it never fully settles (~4s). */
+const MAX_SETTLE_FRAMES = 240;
 
 export class SimCanvas {
   private readonly scene = new THREE.Scene();
@@ -293,6 +293,7 @@ export class SimCanvas {
     else this.settledFrames = 0;
 
     if (this.settledFrames >= SETTLE_FRAMES || this.framesAtTarget >= MAX_SETTLE_FRAMES) {
+      this.fold!.model.velocity.fill(0); // hold the pose dead still (CPU; GPU just stops stepping)
       this.frozen = true;
     }
   }
