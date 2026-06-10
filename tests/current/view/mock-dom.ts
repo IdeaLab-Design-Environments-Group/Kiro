@@ -27,6 +27,7 @@ class MockClassList {
 export class MockElement {
   readonly children: MockElement[] = [];
   readonly listeners = new Map<string, Listener[]>();
+  parent: MockElement | null = null;
   classList = new MockClassList();
   private _className = "";
   textContent = "";
@@ -37,7 +38,10 @@ export class MockElement {
   title = "";
   src = "";
   value = "";
+  href = "";
+  download = "";
   files?: File[];
+  dataset: Record<string, string> = {};
   innerHTMLValue = "";
   contentWindow?: { postMessage: (payload: unknown, target: string) => void };
 
@@ -55,6 +59,7 @@ export class MockElement {
   append(...nodes: any[]): void {
     for (const node of nodes) {
       if (node instanceof MockElement) {
+        node.parent = this;
         this.children.push(node);
       }
     }
@@ -79,6 +84,13 @@ export class MockElement {
     this.dispatch("click", { target: this });
   }
 
+  remove(): void {
+    if (!this.parent) return;
+    const i = this.parent.children.indexOf(this);
+    if (i >= 0) this.parent.children.splice(i, 1);
+    this.parent = null;
+  }
+
   set innerHTML(value: string) {
     this.innerHTMLValue = value;
     this.children.length = 0;
@@ -89,6 +101,8 @@ export class MockElement {
       const child = new MockElement(tag);
       const classMatch = /class="([^"]+)"/.exec(attrs);
       if (classMatch) child.className = classMatch[1];
+      const dataKMatch = /data-k="([^"]+)"/.exec(attrs);
+      if (dataKMatch) child.dataset.k = dataKMatch[1];
       const typeMatch = /type="([^"]+)"/.exec(attrs);
       if (typeMatch) child.type = typeMatch[1];
       const minMatch = /min="([^"]+)"/.exec(attrs);
@@ -100,6 +114,7 @@ export class MockElement {
       const valueMatch = /value="([^"]+)"/.exec(attrs);
       if (valueMatch) child.value = valueMatch[1];
       if (text.trim()) child.textContent = text.trim();
+      child.parent = this;
       this.children.push(child);
     }
   }
@@ -111,6 +126,10 @@ export class MockElement {
   querySelector(selector: string): MockElement | null {
     if (selector.startsWith(".")) {
       return childByClass(this, selector.slice(1)) ?? null;
+    }
+    const dataMatch = /^\[data-k="([^"]+)"\]$/.exec(selector);
+    if (dataMatch) {
+      return childByData(this, "k", dataMatch[1]) ?? null;
     }
     return childrenByTag(this, selector)[0] ?? null;
   }
@@ -171,6 +190,15 @@ export function childByClass(root: MockElement, className: string): MockElement 
   if (root.className.split(/\s+/).includes(className)) return root;
   for (const child of root.children) {
     const found = childByClass(child, className);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+export function childByData(root: MockElement, key: string, value: string): MockElement | undefined {
+  if (root.dataset[key] === value) return root;
+  for (const child of root.children) {
+    const found = childByData(child, key, value);
     if (found) return found;
   }
   return undefined;

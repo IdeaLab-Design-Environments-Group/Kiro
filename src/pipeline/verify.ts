@@ -157,94 +157,109 @@ export function sampledHausdorff(A: SampledMesh, B: SampledMesh): number {
 }
 
 /**
- * Fold the FKLD (guided by its foldedForm frame) and measure dH to `target`.
- * Single-shot: the retry schedule lives in kirigamize.ts.
+ * Optimal rigid alignment (Kabsch/Horn, NO reflection) of corresponding
+ * point pairs: returns R (row-major 3×3) and t minimizing Σ|R·p + t − q|².
+ * Quaternion (Horn) method with Gershgorin-shifted power iteration on the
+ * symmetric 4×4 N matrix — deterministic, Math-only. Reflections are
+ * impossible by construction (quaternions parameterize SO(3) only), so a
+ * mirror-folded sheet shows up as large d_H instead of being "aligned away".
  */
-export function verifyFold(
-  fkld: FoldFile,
-  target: TriMesh,
-  opts: Partial<VerifyOptions> = {},
-): VerifyReport {
-  const { epsilonRel, iterations, strainTol, creaseTol } = { ...DEFAULT_VERIFY, ...opts };
-
-  const scene = buildSceneFromFold(fkld);
-
-  // Equilibrium verification: start AT the goal pose (free vertices included)
-  // with foldPercent already 1, then relax. Stability ⇒ the pattern realizes
-  // the target; any geometric inconsistency shows up as drift.
-  scene.model.position.set(scene.model.goal);
-  scene.model.velocity.fill(0);
-  scene.solver.foldPercent = 1;
-  const settle = scene.solver.solveUntilSettled({
-    target: 1,
-    maxIters: iterations,
-    keEps: 1e-2,
-    minSettleIters: 500, // give residual forces a real chance to push a wrong pattern away
-    quench: true,
-    guard: true,
-  });
-
-  // --- the mm → sim map, derived from the model itself (closes risk R8) ------
-  // applyGuidedFold maps the goal frame by sim = mm·scale + t, where t is
-  // whatever alignment policy the adapter uses (it has already changed once,
-  // from flat-bbox centering to driven-centroid alignment). Rather than
-  // reconstructing the policy, recover t directly from the (goal_mm,
-  // model.goal_sim) pairs the model already holds — exact for any policy.
-  const scale = scene.net.meta.scale;
-  const frames = fkld.file_frames as
-    | { frame_classes?: string[]; vertices_coords?: number[][] }[]
-    | undefined;
-  const goalMm = frames?.find((fr) => (fr.frame_classes ?? []).includes("foldedForm"))?.vertices_coords;
-  if (!goalMm || goalMm.length === 0) {
-    throw new PipelineError("verify", "fkld lacks a foldedForm goal frame — emit must run first");
+export function kabsch(
+  from: Vec3[],
+  to: Vec3[],
+): { R: number[]; t: Vec3 } {
+  const n = Math.min(from.length, to.length);
+  if (n < 3) throw new PipelineError("verify", "kabsch needs ≥3 point pairs");
+  // Centroids.
+  const cf = { x: 0, y: 0, z: 0 };
+  const ct = { x: 0, y: 0, z: 0 };
+  for (let i = 0; i < n; i++) {
+    cf.x += from[i].x; cf.y += from[i].y; cf.z += from[i].z;
+    ct.x += to[i].x; ct.y += to[i].y; ct.z += to[i].z;
   }
-  let tx = 0, ty = 0, tz = 0;
-  for (let i = 0; i < goalMm.length; i++) {
-    tx += scene.model.goal[3 * i] - (goalMm[i][0] ?? 0) * scale;
-    ty += scene.model.goal[3 * i + 1] - (goalMm[i][1] ?? 0) * scale;
-    tz += scene.model.goal[3 * i + 2] - (goalMm[i][2] ?? 0) * scale;
+  cf.x /= n; cf.y /= n; cf.z /= n;
+  ct.x /= n; ct.y /= n; ct.z /= n;
+  // Cross-covariance H = Σ (p−cf)(q−ct)ᵀ.
+  const H = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < n; i++) {
+    const px = from[i].x - cf.x, py = from[i].y - cf.y, pz = from[i].z - cf.z;
+    const qx = to[i].x - ct.x, qy = to[i].y - ct.y, qz = to[i].z - ct.z;
+    H[0] += px * qx; H[1] += px * qy; H[2] += px * qz;
+    H[3] += py * qx; H[4] += py * qy; H[5] += py * qz;
+    H[6] += pz * qx; H[7] += pz * qy; H[8] += pz * qz;
   }
-  tx /= goalMm.length;
-  ty /= goalMm.length;
-  tz /= goalMm.length;
-
-  // --- folded sheet in sim space ---------------------------------------------
-  const pos = scene.model.position;
-  const foldedV: Vec3[] = [];
-  for (let i = 0; i < scene.net.vertices.length; i++) {
-    const x = pos[3 * i];
-    const y = pos[3 * i + 1];
-    const z = pos[3 * i + 2];
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
-      throw new PipelineError("verify", `solver produced non-finite position at node ${i}`);
+  // Horn's symmetric 4×4 N matrix.
+  const [Sxx, Sxy, Sxz, Syx, Syy, Syz, Szx, Szy, Szz] = H;
+  const N = [
+    [Sxx + Syy + Szz, Syz - Szy, Szx - Sxz, Sxy - Syx],
+    [Syz - Szy, Sxx - Syy - Szz, Sxy + Syx, Szx + Sxz],
+    [Szx - Sxz, Sxy + Syx, -Sxx + Syy - Szz, Syz + Szy],
+    [Sxy - Syx, Szx + Sxz, Syz + Szy, -Sxx - Syy + Szz],
+  ];
+  // Dominant eigenvector via power iteration on N + μI (Gershgorin shift).
+  let mu = 0;
+  for (let r = 0; r < 4; r++) {
+    mu = Math.max(mu, Math.abs(N[r][0]) + Math.abs(N[r][1]) + Math.abs(N[r][2]) + Math.abs(N[r][3]));
+  }
+  let q = [1, 0.1, 0.2, 0.3]; // deterministic, not an eigenvector of typical N
+  for (let iter = 0; iter < 200; iter++) {
+    const next = [0, 0, 0, 0];
+    for (let r = 0; r < 4; r++) {
+      next[r] = mu * q[r];
+      for (let c = 0; c < 4; c++) next[r] += N[r][c] * q[c];
     }
-    foldedV.push({ x, y, z });
+    const l = Math.hypot(next[0], next[1], next[2], next[3]) || 1;
+    q = next.map((x) => x / l);
   }
-  const folded: SampledMesh = { v: foldedV, f: scene.net.faces };
+  const [w, x, y, z] = q;
+  // Quaternion → rotation matrix (row-major).
+  const R = [
+    w * w + x * x - y * y - z * z, 2 * (x * y - w * z), 2 * (x * z + w * y),
+    2 * (x * y + w * z), w * w - x * x + y * y - z * z, 2 * (y * z - w * x),
+    2 * (x * z - w * y), 2 * (y * z + w * x), w * w - x * x - y * y + z * z,
+  ];
+  const rot = (p: Vec3): Vec3 => ({
+    x: R[0] * p.x + R[1] * p.y + R[2] * p.z,
+    y: R[3] * p.x + R[4] * p.y + R[5] * p.z,
+    z: R[6] * p.x + R[7] * p.y + R[8] * p.z,
+  });
+  const rc = rot(cf);
+  const t = { x: ct.x - rc.x, y: ct.y - rc.y, z: ct.z - rc.z };
+  return { R, t };
+}
 
-  // --- Q in sim space (same map) ----------------------------------------------
-  const targetSim: SampledMesh = {
-    v: target.vertices.map((p) => ({ x: p.x * scale + tx, y: p.y * scale + ty, z: p.z * scale + tz })),
-    f: target.faces,
+/** Apply a kabsch result to a point. */
+export function applyRigid(R: number[], t: Vec3, p: Vec3): Vec3 {
+  return {
+    x: R[0] * p.x + R[1] * p.y + R[2] * p.z + t.x,
+    y: R[3] * p.x + R[4] * p.y + R[5] * p.z + t.y,
+    z: R[6] * p.x + R[7] * p.y + R[8] * p.z + t.z,
   };
+}
 
-  // --- metrics ----------------------------------------------------------------
-  const toTarget = supDistance(folded, targetSim);
-  const fromTarget = supDistance(targetSim, folded);
-  const dHSim = Math.max(toTarget.d, fromTarget.d);
-  const dH = dHSim / scale; // mm
+interface SceneMetrics {
+  metrics: import("./types.js").FoldMetrics;
+  worstSample: Vec3;
+}
 
-  let qMin = { x: Infinity, y: Infinity, z: Infinity };
-  let qMax = { x: -Infinity, y: -Infinity, z: -Infinity };
-  for (const p of target.vertices) {
-    qMin = { x: Math.min(qMin.x, p.x), y: Math.min(qMin.y, p.y), z: Math.min(qMin.z, p.z) };
-    qMax = { x: Math.max(qMax.x, p.x), y: Math.max(qMax.y, p.y), z: Math.max(qMax.z, p.z) };
-  }
-  const bboxDiag = Math.hypot(qMax.x - qMin.x, qMax.y - qMin.y, qMax.z - qMin.z);
-  const epsilon = epsilonRel * bboxDiag;
-
-  // strain over beams (same formula as the kzr-sim regression test)
+/** Strain + crease residual + aligned d_H of a settled scene vs targetSim. */
+function measureScene(
+  scene: ReturnType<typeof buildSceneFromFold>,
+  targetSim: SampledMesh,
+  scale: number,
+  bboxDiag: number,
+  iterations: number,
+  settled: boolean,
+): SceneMetrics {
   const m = scene.model;
+  const pos = m.position;
+  for (let i = 0; i < pos.length; i++) {
+    if (!Number.isFinite(pos[i])) {
+      throw new PipelineError("verify", `solver produced non-finite position at component ${i}`);
+    }
+  }
+
+  // strain over beams (isometry oracle)
   let meanStrain = 0;
   let maxStrain = 0;
   for (let i = 0; i < m.beams.count; i++) {
@@ -261,9 +276,7 @@ export function verifyFold(
   }
   meanStrain /= Math.max(1, m.beams.count);
 
-  // crease residual: measured θ (actual face normals at the settled pose) vs
-  // the goal-derived target — the drive cannot fake this; it catches M/V
-  // misassignment, wrong dihedrals, and warped faces.
+  // crease residual vs goal-derived targets (rotation-invariant)
   let creaseResidual = 0;
   for (let c = 0; c < m.creases.count; c++) {
     const meas = measureTheta(m, m.creases.face1[c], m.creases.face2[c], m.creases.n3[c], m.creases.n4[c]);
@@ -271,16 +284,133 @@ export function verifyFold(
   }
   creaseResidual /= Math.max(1, m.creases.count);
 
-  // free (non-driven) vertices — when 0, dH is kinematically trivial
-  let freeVertices = 0;
-  for (let i = 0; i < m.numNodes; i++) if (!m.driven[i]) freeVertices++;
+  // Kabsch-align the folded pose onto the goal using the KNOWN per-vertex
+  // correspondence (position[i] ↔ model.goal[i]) — a free fold ends in an
+  // arbitrary rigid pose; alignment must not absorb a mirror (see kabsch).
+  const foldedRaw: Vec3[] = [];
+  const goalPts: Vec3[] = [];
+  for (let i = 0; i < m.numNodes; i++) {
+    foldedRaw.push({ x: pos[3 * i], y: pos[3 * i + 1], z: pos[3 * i + 2] });
+    goalPts.push({ x: m.goal[3 * i], y: m.goal[3 * i + 1], z: m.goal[3 * i + 2] });
+  }
+  const { R, t } = kabsch(foldedRaw, goalPts);
+  const folded: SampledMesh = { v: foldedRaw.map((p) => applyRigid(R, t, p)), f: scene.net.faces };
 
-  // worst source vertex: Q vertex nearest the worst folded sample (sim space)
+  const toTarget = supDistance(folded, targetSim);
+  const fromTarget = supDistance(targetSim, folded);
+  const dH = Math.max(toTarget.d, fromTarget.d) / scale; // mm
+
+  return {
+    metrics: {
+      dH,
+      dHRel: bboxDiag > 0 ? dH / bboxDiag : 0,
+      meanStrain,
+      maxStrain,
+      creaseResidual,
+      iterations,
+      settled,
+    },
+    worstSample: toTarget.worstSample,
+  };
+}
+
+/**
+ * Verify the emitted FKLD against Q two ways (single-shot; the retry
+ * schedule lives in kirigamize.ts):
+ *
+ * 1. FOLD-FROM-FLAT (primary gate): free the model (no driven boundary),
+ *    start at the flat rest pose, ramp foldPercent 0→1 driven only by the
+ *    goal-derived crease targets — the pattern must actually fold itself up
+ *    from the sheet. Kabsch-aligned d_H + strain + crease residual.
+ * 2. EQUILIBRIUM (secondary, reported): start at the goal pose, relax, and
+ *    measure drift — a cheap consistency check that can never pass alone.
+ */
+export function verifyFold(
+  fkld: FoldFile,
+  target: TriMesh,
+  opts: Partial<VerifyOptions> = {},
+): VerifyReport {
+  const { epsilonRel, iterations, strainTol, creaseTol } = { ...DEFAULT_VERIFY, ...opts };
+
+  // --- shared frame: targetSim via the model's own mm → sim map --------------
+  const probe = buildSceneFromFold(fkld);
+  const scale = probe.net.meta.scale;
+  const frames = fkld.file_frames as
+    | { frame_classes?: string[]; vertices_coords?: number[][] }[]
+    | undefined;
+  const goalMm = frames?.find((fr) => (fr.frame_classes ?? []).includes("foldedForm"))?.vertices_coords;
+  if (!goalMm || goalMm.length === 0) {
+    throw new PipelineError("verify", "fkld lacks a foldedForm goal frame — emit must run first");
+  }
+  let tx = 0, ty = 0, tz = 0;
+  for (let i = 0; i < goalMm.length; i++) {
+    tx += probe.model.goal[3 * i] - (goalMm[i][0] ?? 0) * scale;
+    ty += probe.model.goal[3 * i + 1] - (goalMm[i][1] ?? 0) * scale;
+    tz += probe.model.goal[3 * i + 2] - (goalMm[i][2] ?? 0) * scale;
+  }
+  tx /= goalMm.length;
+  ty /= goalMm.length;
+  tz /= goalMm.length;
+  const targetSim: SampledMesh = {
+    v: target.vertices.map((p) => ({ x: p.x * scale + tx, y: p.y * scale + ty, z: p.z * scale + tz })),
+    f: target.faces,
+  };
+  let qMin = { x: Infinity, y: Infinity, z: Infinity };
+  let qMax = { x: -Infinity, y: -Infinity, z: -Infinity };
+  for (const p of target.vertices) {
+    qMin = { x: Math.min(qMin.x, p.x), y: Math.min(qMin.y, p.y), z: Math.min(qMin.z, p.z) };
+    qMax = { x: Math.max(qMax.x, p.x), y: Math.max(qMax.y, p.y), z: Math.max(qMax.z, p.z) };
+  }
+  const bboxDiag = Math.hypot(qMax.x - qMin.x, qMax.y - qMin.y, qMax.z - qMin.z);
+  const epsilon = epsilonRel * bboxDiag;
+
+  // free (non-driven) vertices in the guided model — diagnostic only
+  let freeVertices = 0;
+  for (let i = 0; i < probe.model.numNodes; i++) if (!probe.model.driven[i]) freeVertices++;
+
+  // --- 1. fold-from-flat (primary) -------------------------------------------
+  // Fresh scene: free every node (no drive, no pins) and let removeRigidBody
+  // keep the free fold from drifting; targets are the goal-derived dihedrals.
+  const flatScene = buildSceneFromFold(fkld);
+  flatScene.model.driven.fill(0);
+  flatScene.model.fixed.fill(0);
+  flatScene.model.velocity.fill(0);
+  const flatSettle = flatScene.solver.solveUntilSettled({
+    target: 1,
+    maxIters: iterations,
+    keEps: 1e-2,
+    minSettleIters: 500,
+    quench: true,
+    guard: true,
+    removeRigidBody: true,
+  });
+  const flat = measureScene(flatScene, targetSim, scale, bboxDiag, flatSettle.iters, flatSettle.converged);
+
+  // --- 2. equilibrium (secondary) ---------------------------------------------
+  const eqScene = buildSceneFromFold(fkld);
+  eqScene.model.position.set(eqScene.model.goal);
+  eqScene.model.velocity.fill(0);
+  eqScene.solver.foldPercent = 1;
+  const eqSettle = eqScene.solver.solveUntilSettled({
+    target: 1,
+    maxIters: iterations,
+    keEps: 1e-2,
+    minSettleIters: 500,
+    quench: true,
+    guard: true,
+  });
+  const eq = measureScene(eqScene, targetSim, scale, bboxDiag, eqSettle.iters, eqSettle.converged);
+
+  // worst source vertex: Q vertex nearest the worst fold-from-flat sample
   let worstSourceVertex = 0;
   let best = Infinity;
   for (let v = 0; v < targetSim.v.length; v++) {
     const q = targetSim.v[v];
-    const d = Math.hypot(q.x - toTarget.worstSample.x, q.y - toTarget.worstSample.y, q.z - toTarget.worstSample.z);
+    const d = Math.hypot(
+      q.x - flat.worstSample.x,
+      q.y - flat.worstSample.y,
+      q.z - flat.worstSample.z,
+    );
     if (d < best) {
       best = d;
       worstSourceVertex = v;
@@ -288,16 +418,16 @@ export function verifyFold(
   }
 
   return {
-    dH,
-    dHRel: bboxDiag > 0 ? dH / bboxDiag : 0,
+    foldFromFlat: flat.metrics,
+    equilibrium: eq.metrics,
     epsilon,
-    meanStrain,
-    maxStrain,
-    creaseResidual,
     freeVertices,
-    iterations: settle.iters,
     attempts: 1,
-    converged: settle.converged && dH <= epsilon && meanStrain <= strainTol && creaseResidual <= creaseTol,
+    converged:
+      flat.metrics.settled &&
+      flat.metrics.dH <= epsilon &&
+      flat.metrics.meanStrain <= strainTol &&
+      flat.metrics.creaseResidual <= creaseTol,
     worstSourceVertex,
   };
 }

@@ -87,24 +87,51 @@ export interface LipPair {
 }
 
 /**
- * Flattened cut mesh (M3, `unfold.ts`), globally indexed: one vertex/face
- * array for the whole cut mesh, with per-face patch labels. Cutting can
- * legitimately disconnect the surface (e.g. a saddle fan whose faces connect
- * only through the slit vertex), so `patchCount` may exceed 1; each patch is
- * laid out around its own origin and M4's packer translates patches apart.
+ * A vent at a δ<0 vertex (K1, proper-kirigami semantics): a sliver of
+ * Q-coverage of total angle |δ| removed from the flat sheet so the remaining
+ * material is exactly 2π around the vertex. The slit through the vertex is
+ * zero-width in the flat pattern and opens into a small uncovered hole when
+ * folded — the algorithm spec's "open slit / deliberate hole".
+ */
+export interface VentRecord {
+  /** Source (Q) vertex the vent relieves. */
+  sourceVertex: number;
+  /** Removed wedge angle = |δ(sourceVertex)| (rad). */
+  angle: number;
+  /**
+   * Sheet edges (cut-mesh vertex pairs) bounding the removed sliver — the
+   * physically-cut vent lines, tagged cutType "vent" downstream.
+   */
+  ventEdges: [number, number][];
+}
+
+/**
+ * Flattened single-sheet kirigami pattern (M3/K1, `unfold.ts`), globally
+ * indexed. Proper-kirigami invariant: the sheet is ONE connected piece and
+ * every interior vertex carries exactly 2π of flat material — δ>0 vertices
+ * show dart gaps (wedges cut out BETWEEN Q-faces), δ<0 vertices have vent
+ * slivers removed from coverage so their slits are zero-width in flat.
  */
 export interface UnfoldResult {
-  /** Flat position per cut-mesh vertex (mm); patches laid out independently. */
+  /** Flat position per cut-mesh vertex (mm). */
   flat: Vec2[];
   /** Cut-mesh triangles (global vertex indices). */
   faces: [number, number, number][];
-  /** Connected-component label per face. */
+  /** Connected-component label per face (single sheet ⇒ all 0). */
   patchOfFace: number[];
   patchCount: number;
-  /** Provenance chain: cut-mesh vertex → Q vertex. */
+  /** Provenance: cut-mesh vertex → Q vertex; −1 for synthesized vertices. */
   origVertex: number[];
+  /**
+   * Folded-target position per cut-mesh vertex (mm, on Q): Q's position for
+   * copies, the interpolated on-Q point for synthesized vent vertices. The
+   * authoritative source for the emitted goal frame (origVertex can be −1).
+   */
+  goalPos: Vec3[];
   /** Cut-edge lip pairs (global cut-mesh vertex ids). */
   lips: LipPair[];
+  /** Vent slivers removed at δ<0 vertices. */
+  vents: VentRecord[];
   /** Source-mesh edge ids added by the relief loop. */
   reliefEdges: number[];
   /** Sum of source-edge lengths over all cuts incl. relief (mm). */
@@ -114,7 +141,7 @@ export interface UnfoldResult {
 export type EdgeAssignment = "M" | "V" | "F" | "B" | "C";
 export type CutType = "major" | "minor" | "seam" | "dart" | "auxetic" | "vent" | "tab";
 
-/** Packed flat pattern with classification (M4, `route-seams.ts`). */
+/** Placed flat pattern with classification (M4/K3, `route-seams.ts`). */
 export interface Sheet {
   vertices: Vec2[];
   faces: [number, number, number][];
@@ -123,38 +150,53 @@ export interface Sheet {
   /** Signed dihedral target θ in rad (AKDE convention: mountain positive); null on B/C. */
   foldAngle: (number | null)[];
   cutType: (CutType | null)[];
-  /** Provenance chain continues: sheet vertex → Q vertex. */
+  /** Provenance: sheet vertex → Q vertex; −1 for synthesized vertices. */
   origVertex: number[];
+  /** Folded-target position per sheet vertex (mm) — feeds the goal frame. */
+  goalPos: Vec3[];
   lips: LipPair[];
+  vents: VentRecord[];
   patchOfFace: number[];
+  /** The rectangle of paper the pattern is cut from (pattern bbox + margin, mm). */
+  sheetRect: { widthMm: number; heightMm: number; marginMm: number };
 }
 
-/**
- * Result of the simulator verification (M5, `verify.ts`).
- *
- * The driven forward process positions sheet-boundary vertices
- * kinematically, so the verification leans on residuals the drive cannot
- * fake: `meanStrain`/`maxStrain` (bar isometry oracle) and `creaseResidual`
- * (measured θ from actual face normals vs goal dihedral), plus `dH` which is
- * informative whenever free interior vertices exist (`freeVertices` > 0).
- */
-export interface VerifyReport {
-  /** Sampled symmetric Hausdorff distance, mm. */
+/** Metrics of one settled fold (K4, `verify.ts`). */
+export interface FoldMetrics {
+  /** Sampled symmetric Hausdorff distance to Q after rigid alignment, mm. */
   dH: number;
   /** dH / bbox diagonal of Q. */
   dHRel: number;
-  /** The ε actually used, mm. */
-  epsilon: number;
   meanStrain: number;
   maxStrain: number;
   /** Mean |θ_measured − θ_target| over creases at the settled pose (rad). */
   creaseResidual: number;
-  /** Number of non-driven sheet vertices (0 ⇒ dH is kinematically trivial). */
-  freeVertices: number;
   iterations: number;
+  /** solveUntilSettled converged (finite, KE below threshold). */
+  settled: boolean;
+}
+
+/**
+ * Result of the simulator verification (K4, `verify.ts`).
+ *
+ * `foldFromFlat` is the PRIMARY gate — the pattern is folded up from the
+ * flat rest pose by its crease targets alone (free fold, no driven
+ * boundary), Kabsch-aligned to Q, and measured. That is the honest
+ * "actually folds from a sheet of paper" test. `equilibrium` (start at the
+ * goal pose, relax, measure drift) is kept as a secondary reported metric —
+ * never sufficient alone.
+ */
+export interface VerifyReport {
+  foldFromFlat: FoldMetrics;
+  equilibrium: FoldMetrics;
+  /** The ε actually used, mm. */
+  epsilon: number;
+  /** Number of non-driven sheet vertices in the equilibrium (guided) mode. */
+  freeVertices: number;
   attempts: number;
+  /** foldFromFlat.dH ≤ ε AND its strain/crease residuals within tolerance. */
   converged: boolean;
-  /** Q vertex nearest the worst sample — the refine hook's terminal. */
+  /** Q vertex nearest the worst fold-from-flat sample — the refine terminal. */
   worstSourceVertex: number;
 }
 

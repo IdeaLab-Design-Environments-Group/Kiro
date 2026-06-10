@@ -22,16 +22,18 @@
  */
 
 import { distance } from "../core/vec3.js";
-import { edgeKey, edgeLength, vertexWedges } from "./mesh.js";
+import { edgeKey, edgeLength, faceAngles, vertexWedges } from "./mesh.js";
 import { shortestPaths } from "./plan-cuts.js";
 import {
   PipelineError,
   type CutPlan,
+  type DefectReport,
   type LipPair,
   type MeshTopology,
   type TriMesh,
   type UnfoldResult,
   type Vec2,
+  type VentRecord,
 } from "./types.js";
 
 /** Hard cap on relief-loop iterations (each adds ≥1 cut edge, so ≤E anyway). */
@@ -42,17 +44,37 @@ const AUDIT_REL = 1e-6;
 
 export interface CutMesh {
   mesh: TriMesh;
-  /** cut vertex → source (Q) vertex. */
+  /** cut vertex → source (Q) vertex; −1 for synthesized vent vertices. */
   origVertex: number[];
+  /** Folded-target position per cut vertex (mm, on Q). */
+  goalPos: TriMesh["vertices"];
   lips: LipPair[];
+  vents: VentRecord[];
 }
+
+/** Angular tolerance for vent consumption arithmetic (rad). */
+const ANG_EPS = 1e-9;
 
 /**
  * Split the mesh along `cutEdges`: one vertex copy per fan wedge. Boundary
  * source edges in the cut set are ignored (already boundary). Returns a fresh
  * mesh — re-derive topology, never mutate.
+ *
+ * `ventAngles` (K1, proper-kirigami): map of δ<0 source vertices → |δ|. At
+ * each, a sliver of Q-coverage of total angle |δ| is removed from the LARGER
+ * fan wedge, starting at its leading lip — consuming whole faces while they
+ * fit and splitting the face where the remainder lands (the neighbor across
+ * the split edge is split too, keeping the mesh conforming). Afterward the
+ * flat material around the vertex totals exactly 2π, so the slit lips are
+ * coincident (zero-width) in the layout and the removed sliver is the vent
+ * hole that opens when folded.
  */
-export function cutAlongEdges(mesh: TriMesh, topo: MeshTopology, cutEdges: number[]): CutMesh {
+export function cutAlongEdges(
+  mesh: TriMesh,
+  topo: MeshTopology,
+  cutEdges: number[],
+  ventAngles: Map<number, number> = new Map(),
+): CutMesh {
   const cutSet = new Set(cutEdges.filter((e) => topo.edges[e].faces.length === 2));
   const isCut = (e: number): boolean => cutSet.has(e);
 
@@ -60,20 +82,30 @@ export function cutAlongEdges(mesh: TriMesh, topo: MeshTopology, cutEdges: numbe
   const origVertex: number[] = [];
   /** cornerCopy.get(`${f}_${v}`) → cut-mesh vertex id for face f's corner at v. */
   const cornerCopy = new Map<string, number>();
+  /** Fan-ordered wedges per source vertex (kept for vent application). */
+  const wedgesOf = new Map<number, { copy: number; faces: number[]; angle: number }[]>();
 
   for (let v = 0; v < mesh.vertices.length; v++) {
     const wedges = vertexWedges(mesh, topo, v, isCut);
+    const recorded: { copy: number; faces: number[]; angle: number }[] = [];
     for (const wedge of wedges) {
       const id = vertices.length;
       vertices.push({ ...mesh.vertices[v] });
       origVertex.push(v);
       for (const f of wedge.faces) cornerCopy.set(`${f}_${v}`, id);
+      recorded.push({ copy: id, faces: wedge.faces, angle: wedge.angle });
     }
+    if (ventAngles.has(v)) wedgesOf.set(v, recorded);
   }
 
-  const faces = mesh.faces.map(
+  const goalPos = vertices.map((p) => ({ ...p }));
+
+  // Faces by SOURCE face id; vent application may null (remove) or split them.
+  const faces: ([number, number, number] | null)[] = mesh.faces.map(
     (fv, f) => fv.map((v) => cornerCopy.get(`${f}_${v}`)!) as [number, number, number],
   );
+  /** Extra faces appended by vent splits (neighbor splitting). */
+  const extraFaces: [number, number, number][] = [];
 
   const lips: LipPair[] = [];
   for (const e of cutSet) {
@@ -86,7 +118,176 @@ export function cutAlongEdges(mesh: TriMesh, topo: MeshTopology, cutEdges: numbe
     });
   }
 
-  return { mesh: { vertices, faces }, origVertex, lips };
+  // --- Vents (K1): remove a sliver of angle |δ| at each δ<0 slit vertex ----
+  const vents: VentRecord[] = [];
+  for (const [v, angle] of ventAngles) {
+    const recorded = wedgesOf.get(v) ?? [];
+    // The slit must REACH v (cut-degree ≥ 1) so the wedge walk has a leading
+    // lip to start the sliver from; a closed untouched ring has no lip.
+    if (!topo.vertexEdges[v].some((e) => cutSet.has(e))) {
+      throw new PipelineError("unfold", `vent vertex ${v} has no incident slit (cut-degree 0)`, { vertex: v });
+    }
+    const wedge = recorded.reduce((a, b) => (b.angle > a.angle ? b : a));
+    if (angle >= wedge.angle - ANG_EPS) {
+      throw new PipelineError(
+        "unfold",
+        `vent angle ${angle.toFixed(4)} ≥ largest wedge ${wedge.angle.toFixed(4)} at vertex ${v} — mesh too coarse for this defect`,
+        { vertex: v },
+      );
+    }
+    const ventEdges: [number, number][] = [];
+    let remaining = angle;
+
+    // Walk the wedge fan from its leading side, consuming corner angle at v.
+    for (let i = 0; i < wedge.faces.length && remaining > ANG_EPS; i++) {
+      const f = wedge.faces[i];
+      const src = mesh.faces[f];
+      const alpha = faceAngles(mesh, f)[src.indexOf(v)];
+      // Leading neighbor: shared with the previous fan face (or, for i=0, the
+      // vertex completing the leading separator/lip edge — the one NOT shared
+      // with the next face; for a 1-face wedge either, deterministically).
+      const others = src.filter((x) => x !== v);
+      let lead: number;
+      if (i > 0) {
+        const prev = mesh.faces[wedge.faces[i - 1]];
+        lead = others.find((x) => prev.includes(x))!;
+      } else if (wedge.faces.length > 1) {
+        const next = mesh.faces[wedge.faces[1]];
+        lead = others.find((x) => !next.includes(x)) ?? others[0];
+      } else {
+        lead = Math.min(...others);
+      }
+      const trail = others.find((x) => x !== lead)!;
+
+      if (remaining >= alpha - ANG_EPS) {
+        // Consume the whole face: it leaves the sheet; its far edge becomes a
+        // vent boundary on the neighbor's side (or vanishes if already boundary).
+        faces[f] = null;
+        remaining -= alpha;
+        const farEdge = topo.edgeIndex.get(edgeKey(lead, trail))!;
+        const neighbor = topo.edges[farEdge].faces.find((g) => g !== f);
+        if (neighbor !== undefined && faces[neighbor] !== null) {
+          ventEdges.push([cornerCopy.get(`${neighbor}_${lead}`)!, cornerCopy.get(`${neighbor}_${trail}`)!]);
+        }
+        continue;
+      }
+
+      // Split the face: insert m on segment (lead, trail) at angle `remaining`
+      // from edge (v, lead). Sine rule in triangle (v, lead, trail):
+      //   |lead,m| = |v,lead| · sin(r) / sin(β + r),  β = angle at lead.
+      const beta = faceAngles(mesh, f)[src.indexOf(lead)];
+      const lvl = distance(mesh.vertices[v], mesh.vertices[lead]);
+      const llt = distance(mesh.vertices[lead], mesh.vertices[trail]);
+      const am = (lvl * Math.sin(remaining)) / Math.sin(beta + remaining);
+      const t = Math.min(1 - 1e-9, Math.max(1e-9, am / llt));
+      const pl = mesh.vertices[lead];
+      const pt = mesh.vertices[trail];
+      const m3 = { x: pl.x + t * (pt.x - pl.x), y: pl.y + t * (pt.y - pl.y), z: pl.z + t * (pt.z - pl.z) };
+      const m = vertices.length;
+      vertices.push(m3);
+      goalPos.push({ ...m3 });
+      origVertex.push(-1);
+
+      const vc = cornerCopy.get(`${f}_${v}`)!;
+      const lc = cornerCopy.get(`${f}_${lead}`)!;
+      void cornerCopy.get(`${f}_${trail}`); // (trail copy unchanged)
+      // Keep (v, m, trail) — the sliver (v, lead, m) leaves the sheet. Replace
+      // lead's slot with m to preserve winding.
+      faces[f] = (faces[f]!.map((x) => (x === lc ? m : x)) as [number, number, number]);
+      // The new boundary ray (v, m) is a physically-cut vent line.
+      ventEdges.push([vc, m]);
+
+      // Conformity: split the neighbor across (lead, trail) at m too.
+      const farEdge = topo.edgeIndex.get(edgeKey(lead, trail))!;
+      const neighbor = topo.edges[farEdge].faces.find((g) => g !== f);
+      if (neighbor !== undefined && faces[neighbor] !== null) {
+        const ntri = faces[neighbor]!;
+        const nl = cornerCopy.get(`${neighbor}_${lead}`)!;
+        const nt = cornerCopy.get(`${neighbor}_${trail}`)!;
+        const third = ntri.find((x) => x !== nl && x !== nt)!;
+        // Preserve winding: find the cyclic order of (nl, nt) in ntri.
+        const ia = ntri.indexOf(nl);
+        const traversesLeadToTrail = ntri[(ia + 1) % 3] === nt;
+        if (traversesLeadToTrail) {
+          faces[neighbor] = [nl, m, third];
+          extraFaces.push([m, nt, third]);
+        } else {
+          faces[neighbor] = [nt, m, third];
+          extraFaces.push([m, nl, third]);
+        }
+        // The lead-side sub-edge (lead, m) is a vent boundary on the
+        // neighbor's surviving side.
+        ventEdges.push([nl, m]);
+      }
+      remaining = 0;
+    }
+
+    if (remaining > 1e-6) {
+      throw new PipelineError("unfold", `vent at vertex ${v} could not absorb ${remaining.toFixed(6)} rad`, { vertex: v });
+    }
+    vents.push({ sourceVertex: v, angle, ventEdges });
+  }
+
+  // --- Assemble final arrays; drop orphaned vertices --------------------------
+  const finalFaces = [...faces.filter((f): f is [number, number, number] => f !== null), ...extraFaces];
+  const used = new Set<number>();
+  for (const f of finalFaces) for (const x of f) used.add(x);
+  const remap = new Map<number, number>();
+  const outVerts: TriMesh["vertices"] = [];
+  const outOrig: number[] = [];
+  const outGoal: TriMesh["vertices"] = [];
+  for (let i = 0; i < vertices.length; i++) {
+    if (!used.has(i)) continue;
+    remap.set(i, outVerts.length);
+    outVerts.push(vertices[i]);
+    outOrig.push(origVertex[i]);
+    outGoal.push(goalPos[i]);
+  }
+  const remappedFaces = finalFaces.map((f) => f.map((x) => remap.get(x)!) as [number, number, number]);
+
+  // Edge-existence set for lip filtering (a vent may have removed one side).
+  const edgeSet = new Set<string>();
+  for (const f of remappedFaces) {
+    for (const [a, b] of [[f[0], f[1]], [f[1], f[2]], [f[2], f[0]]] as [number, number][]) {
+      edgeSet.add(edgeKey(a, b));
+    }
+  }
+  const mapPair = (p: [number, number]): [number, number] | null => {
+    const a = remap.get(p[0]);
+    const b = remap.get(p[1]);
+    return a !== undefined && b !== undefined ? [a, b] : null;
+  };
+  const outLips: LipPair[] = [];
+  const extraVentEdges: [number, number][] = [];
+  for (const lip of lips) {
+    const a = mapPair(lip.lipA);
+    const b = mapPair(lip.lipB);
+    const aLive = a !== null && edgeSet.has(edgeKey(a[0], a[1]));
+    const bLive = b !== null && edgeSet.has(edgeKey(b[0], b[1]));
+    if (aLive && bLive) {
+      outLips.push({ sourceEdge: lip.sourceEdge, lipA: a!, lipB: b! });
+    } else if (aLive || bLive) {
+      // One side vanished into a vent sliver — the survivor bounds the vent.
+      extraVentEdges.push((aLive ? a : b)!);
+    }
+  }
+  const outVents: VentRecord[] = vents.map((vt) => ({
+    sourceVertex: vt.sourceVertex,
+    angle: vt.angle,
+    ventEdges: vt.ventEdges
+      .map(mapPair)
+      .filter((p): p is [number, number] => p !== null && edgeSet.has(edgeKey(p[0], p[1]))),
+  }));
+  if (extraVentEdges.length > 0 && outVents.length > 0) {
+    // Attach orphaned lip survivors to the nearest vent record (by shared vertex).
+    for (const e of extraVentEdges) {
+      const owner =
+        outVents.find((vt) => vt.ventEdges.some((ve) => ve.includes(e[0]) || ve.includes(e[1]))) ?? outVents[0];
+      owner.ventEdges.push(e);
+    }
+  }
+
+  return { mesh: { vertices: outVerts, faces: remappedFaces }, origVertex: outOrig, goalPos: outGoal, lips: outLips, vents: outVents };
 }
 
 const cross2 = (ax: number, ay: number, bx: number, by: number): number => ax * by - ay * bx;
@@ -259,41 +460,43 @@ export function findSelfOverlap(
 }
 
 /**
- * Cut → flatten (per patch) → relief loop. Cutting may legitimately
- * disconnect the surface (a slit vertex can be a patch's only articulation),
- * so each connected component is laid out independently; overlap is tested
- * within patches only (the M4 packer translates patches apart). Each relief
- * pass adds ≥1 interior edge to the cut set, hard-capped at RELIEF_MAX.
+ * Cut → vent → flatten → relief loop, under the proper-kirigami invariants:
+ * the sheet must stay ONE connected piece (a disconnecting plan is a planner
+ * bug, hard-gated here), and δ<0 slit vertices get vent slivers so the flat
+ * material totals exactly 2π everywhere. Each relief pass adds ≥1 interior
+ * edge to the cut set, hard-capped at RELIEF_MAX.
  */
-export function seamedUnfold(mesh: TriMesh, topo: MeshTopology, plan: CutPlan): UnfoldResult {
+export function seamedUnfold(
+  mesh: TriMesh,
+  topo: MeshTopology,
+  plan: CutPlan,
+  defects: DefectReport,
+): UnfoldResult {
   const cutSet = new Set(plan.cutEdges);
   const reliefEdges: number[] = [];
 
+  // δ<0 slit vertices → vent angle |δ| (K1).
+  const ventAngles = new Map<number, number>();
+  for (let v = 0; v < plan.perVertexAction.length; v++) {
+    if (plan.perVertexAction[v] === "slit" && defects.defects[v] < 0) {
+      ventAngles.set(v, -defects.defects[v]);
+    }
+  }
+
   for (let pass = 0; pass <= RELIEF_MAX; pass++) {
-    const cut = cutAlongEdges(mesh, topo, [...cutSet]);
+    const cut = cutAlongEdges(mesh, topo, [...cutSet], ventAngles);
     const components = labelComponents(cut.mesh);
-
-    // Lay out every patch into one global flat array.
-    const flat: Vec2[] = new Array(cut.mesh.vertices.length).fill(null).map(() => ({ x: 0, y: 0 }));
-    const patchFaceIds: number[][] = Array.from({ length: components.count }, () => []);
-    for (let f = 0; f < cut.mesh.faces.length; f++) patchFaceIds[components.label[f]].push(f);
-    for (const faceIds of patchFaceIds) {
-      const local = unfoldPatch(cut, faceIds);
-      const touched = new Set<number>();
-      for (const f of faceIds) for (const v of cut.mesh.faces[f]) touched.add(v);
-      for (const v of touched) flat[v] = local[v];
+    if (components.count !== 1) {
+      throw new PipelineError(
+        "unfold",
+        `cut plan disconnected the sheet into ${components.count} pieces — a proper kirigami is one connected sheet (planner bug)`,
+        { components: components.count },
+      );
     }
 
-    // Overlap detection per patch (cross-patch overlap is meaningless here).
-    let overlap: [number, number] | null = null;
-    for (const faceIds of patchFaceIds) {
-      const subset = faceIds.map((f) => cut.mesh.faces[f]);
-      const o = findSelfOverlap(flat, subset);
-      if (o !== null) {
-        overlap = [faceIds[o[0]], faceIds[o[1]]];
-        break;
-      }
-    }
+    const allFaces = cut.mesh.faces.map((_, f) => f);
+    const flat = unfoldPatch(cut, allFaces);
+    const overlap = findSelfOverlap(flat, cut.mesh.faces);
 
     if (overlap === null) {
       const totalCutLength = [...cutSet].reduce((acc, e) => acc + edgeLength(mesh, topo, e), 0);
@@ -303,7 +506,9 @@ export function seamedUnfold(mesh: TriMesh, topo: MeshTopology, plan: CutPlan): 
         patchOfFace: components.label,
         patchCount: components.count,
         origVertex: cut.origVertex,
+        goalPos: cut.goalPos,
         lips: cut.lips,
+        vents: cut.vents,
         reliefEdges: [...reliefEdges],
         totalCutLength,
       };
@@ -317,7 +522,7 @@ export function seamedUnfold(mesh: TriMesh, topo: MeshTopology, plan: CutPlan): 
       );
     }
 
-    const added = addReliefCut(mesh, topo, cut, flat, overlap, cutSet);
+    const added = addReliefCut(mesh, topo, cut, flat, overlap, cutSet, ventAngles);
     reliefEdges.push(...added);
   }
   /* istanbul ignore next */
@@ -362,7 +567,9 @@ function labelComponents(mesh: TriMesh): { count: number; label: number[] } {
 /**
  * Relief: route the shortest interior source-mesh path from the existing cut
  * graph / boundary to a source vertex of the later overlapping face, so the
- * overlapping limb swings away on the next unfold. Returns the edges added.
+ * overlapping limb swings away on the next unfold. Every candidate is
+ * TRIAL-VERIFIED to keep the sheet one connected piece (proper-kirigami
+ * invariant) before being accepted. Returns the edges added.
  */
 function addReliefCut(
   mesh: TriMesh,
@@ -371,11 +578,18 @@ function addReliefCut(
   flat: Vec2[],
   overlap: [number, number],
   cutSet: Set<number>,
+  ventAngles: Map<number, number>,
 ): number[] {
   const [, f2] = overlap; // later face in BFS order — the limb to free
   const tri = cut.mesh.faces[f2];
   const cx = (flat[tri[0]].x + flat[tri[1]].x + flat[tri[2]].x) / 3;
   const cy = (flat[tri[0]].y + flat[tri[1]].y + flat[tri[2]].y) / 3;
+
+  /** Accept a fresh edge set only if the cut sheet stays one piece. */
+  const staysConnected = (fresh: number[]): boolean => {
+    const trial = cutAlongEdges(mesh, topo, [...cutSet, ...fresh], ventAngles);
+    return labelComponents(trial.mesh).count === 1;
+  };
 
   // Sources: every vertex already on the cut graph or the mesh boundary.
   const sources = new Set<number>();
@@ -388,9 +602,11 @@ function addReliefCut(
   const res = shortestPaths(mesh, topo, [...sources]);
 
   // Candidate targets: f2's source vertices ordered by flat distance to the
-  // overlap centroid; take the first yielding a non-empty path of new edges.
+  // overlap centroid; take the first yielding a non-empty, connectivity-safe
+  // path of new edges.
   const candidates = [...tri]
     .map((v) => ({ src: cut.origVertex[v], d: Math.hypot(flat[v].x - cx, flat[v].y - cy) }))
+    .filter((c) => c.src >= 0) // skip synthesized vent vertices
     .sort((p, q) => p.d - q.d);
 
   for (const { src } of candidates) {
@@ -401,28 +617,29 @@ function addReliefCut(
       cur = res.prevVertex[cur];
     }
     const fresh = path.filter((e) => !cutSet.has(e) && topo.edges[e].faces.length === 2);
-    if (fresh.length > 0) {
+    if (fresh.length > 0 && staysConnected(fresh)) {
       for (const e of fresh) cutSet.add(e);
       return fresh;
     }
   }
 
   // All three vertices already touch the cut graph: free the face itself by
-  // cutting its shortest not-yet-cut interior edge.
-  let bestE = -1;
-  let best = Infinity;
+  // cutting its shortest not-yet-cut interior edge that keeps one piece.
+  const edgeCandidates: { e: number; l: number }[] = [];
   for (const [a, b] of [[tri[0], tri[1]], [tri[1], tri[2]], [tri[2], tri[0]]]) {
-    const e = topo.edgeIndex.get(edgeKey(cut.origVertex[a], cut.origVertex[b]));
+    const sa = cut.origVertex[a];
+    const sb = cut.origVertex[b];
+    if (sa < 0 || sb < 0) continue;
+    const e = topo.edgeIndex.get(edgeKey(sa, sb));
     if (e === undefined || cutSet.has(e) || topo.edges[e].faces.length !== 2) continue;
-    const l = edgeLength(mesh, topo, e);
-    if (l < best) {
-      best = l;
-      bestE = e;
+    edgeCandidates.push({ e, l: edgeLength(mesh, topo, e) });
+  }
+  edgeCandidates.sort((p, q) => p.l - q.l);
+  for (const { e } of edgeCandidates) {
+    if (staysConnected([e])) {
+      cutSet.add(e);
+      return [e];
     }
   }
-  if (bestE === -1) {
-    throw new PipelineError("unfold", "relief cut: no addable edge near overlap", { overlap });
-  }
-  cutSet.add(bestE);
-  return [bestE];
+  throw new PipelineError("unfold", "relief cut: no connectivity-safe edge near overlap", { overlap });
 }

@@ -22,7 +22,7 @@ import { emitFkld } from "./emit.js";
 import { parseMesh } from "./import.js";
 import { buildTopology } from "./mesh.js";
 import { planCuts } from "./plan-cuts.js";
-import { packPatches } from "./route-seams.js";
+import { placeSheet } from "./route-seams.js";
 import { seamedUnfold } from "./unfold.js";
 import { DEFAULT_VERIFY, verifyFold } from "./verify.js";
 import type { FoldFile } from "../model/fold-file.js";
@@ -92,7 +92,7 @@ export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> =
       .map((x) => x.v);
     let unfold: UnfoldResult;
     try {
-      unfold = seamedUnfold(mesh, topo, plan);
+      unfold = seamedUnfold(mesh, topo, plan, defects);
     } catch (err) {
       if (err instanceof PipelineError && err.stage === "unfold" && tuckSet.length > 0) {
         // Honest scope: tucked δ>0 vertices stay interior, so the patch is not
@@ -105,7 +105,7 @@ export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> =
       }
       throw err;
     }
-    const sheet = packPatches(unfold, { mesh, topo, defects });
+    const sheet = placeSheet(unfold, { mesh, topo, defects });
     const fkld = emitFkld(sheet, {
       defects,
       target: mesh,
@@ -123,7 +123,9 @@ export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> =
     return { ...stages, conditioning: reports, defects, report: null };
   }
 
-  // Stage 5: verify with the bounded optimize schedule.
+  // Stage 5: fold-from-flat verification with the bounded optimize schedule
+  // (K4): (1) free fold; (2) free fold at 3× iterations; (3) re-plan with the
+  // worst-fitting vertex as an extra terminal and free-fold again.
   let report = verifyFold(stages.fkld, mesh, {
     epsilonRel: opts.epsilonRel,
     iterations: opts.iterations,
@@ -131,27 +133,27 @@ export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> =
   let attempts = 1;
 
   if (!report.converged) {
-    // Attempt 2: free the worst-fitting region with an extra relief terminal.
+    // Attempt 2: same pattern, triple the iteration budget.
+    const longReport = verifyFold(stages.fkld, mesh, {
+      epsilonRel: opts.epsilonRel,
+      iterations: 3 * opts.iterations,
+    });
+    attempts = 2;
+    if (longReport.foldFromFlat.dH <= report.foldFromFlat.dH) report = longReport;
+  }
+
+  if (!report.converged) {
+    // Attempt 3: free the worst-fitting region with an extra relief terminal.
     const retried = runPipeline([report.worstSourceVertex]);
     const retriedReport = verifyFold(retried.fkld, mesh, {
       epsilonRel: opts.epsilonRel,
       iterations: opts.iterations,
     });
-    attempts = 2;
-    if (retriedReport.dH <= report.dH) {
+    attempts = 3;
+    if (retriedReport.foldFromFlat.dH <= report.foldFromFlat.dH) {
       stages = retried;
       report = retriedReport;
     }
-  }
-
-  if (!report.converged) {
-    // Attempt 3: same pattern, triple the iteration budget.
-    const longReport = verifyFold(stages.fkld, mesh, {
-      epsilonRel: opts.epsilonRel,
-      iterations: 3 * opts.iterations,
-    });
-    attempts = 3;
-    if (longReport.dH <= report.dH) report = longReport;
   }
 
   return {

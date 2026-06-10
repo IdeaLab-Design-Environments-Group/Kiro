@@ -1,5 +1,7 @@
 /**
- * Cut planning (M2): decide where the cuts go — necessity, connection, routing.
+ * Cut planning (M2/K2): decide where the cuts go — necessity, connection,
+ * routing — under the PROPER-KIRIGAMI invariant: the cut sheet must stay one
+ * connected piece.
  *
  * Pattern: greedy approximation algorithm + strategy switch. The dart-vs-tuck
  * decision is an explicit `strategy` parameter (the proposal's "dial"); the
@@ -7,22 +9,24 @@
  * MST-of-metric-closure 2-approximation — exactly "shortest paths along mesh
  * edges" from the algorithm spec.
  *
- * Formulas / rules (kirigamizer_algorithms.tex §4):
+ * Formulas / rules (kirigamizer_algorithms.tex §4 + K1 vents):
  *   necessity:   v needs a cut  ⟺  δ(v) ≠ 0 (and not tucked)
  *   routing:     min_C Σ_{e∈C} (len(e) + λ·vis(e))   [vis ≡ 0 in v1]
- *   sign rule:   δ>0 → dart (cut-degree ≥ 1 suffices: single wedge 2π−δ < 2π)
- *                δ<0 → slit with cut-degree ≥ 2 and every wedge < 2π
- *                (the "wedge rule" — a cut-degree-1 negative vertex keeps a
- *                 wedge of 2π−δ > 2π, which cannot embed flat)
+ *   sign rule:   δ>0 → dart (cut-degree ≥ 1: the dart gap of angle δ closes
+ *                when folded);
+ *                δ<0 → slit reaching v (cut-degree ≥ 1) + a VENT sliver of
+ *                angle |δ| removed in the unfold (K1) — the old "wedge rule"
+ *                (cut-degree ≥ 2 splitting the fan) is obsolete: the vent
+ *                supplies the 2π closure without tearing the sheet.
  *
- * The cut set is kept a FOREST (cycles are pruned): cutting a genus-0 surface
- * along a forest keeps every patch a topological disk.
+ * Connectivity: the cut set is a FOREST (cycles pruned) touching the mesh
+ * boundary at most ONCE (the boundary pseudo-terminal joins the MST exactly
+ * once, and terminal-to-terminal paths are forbidden from passing THROUGH
+ * boundary vertices) — a tree with ≤1 boundary contact never disconnects.
  */
 
-import { edgeLength, faceAngles, vertexWedges } from "./mesh.js";
+import { edgeLength } from "./mesh.js";
 import { PipelineError, type CutPlan, type DefectReport, type MeshTopology, type TriMesh } from "./types.js";
-
-const TAU = 2 * Math.PI;
 
 export interface PlanOptions {
   /** Seam-visibility weight λ (cost plumbing; vis ≡ 0 in v1). */
@@ -43,12 +47,16 @@ export interface ShortestPathResult {
 /**
  * Dijkstra over mesh vertices from (possibly multiple) sources.
  * Weight of edge e defaults to len(e) + λ·vis(e); vis ≡ 0 in v1.
+ * Vertices in `noTransit` may be reached (as path endpoints) but are never
+ * expanded — paths cannot pass THROUGH them (K2: keeps interior cut paths
+ * off the boundary so the sheet cannot be torn boundary-to-boundary).
  */
 export function shortestPaths(
   mesh: TriMesh,
   topo: MeshTopology,
   sources: number[],
   weights?: number[],
+  noTransit?: Set<number>,
 ): ShortestPathResult {
   const n = mesh.vertices.length;
   const w = weights ?? topo.edges.map((_, e) => edgeLength(mesh, topo, e));
@@ -69,6 +77,7 @@ export function shortestPaths(
     }
     if (u === -1) break;
     done[u] = true;
+    if (noTransit?.has(u) && dist[u] > 0) continue; // reachable, not expandable
     for (const e of topo.vertexEdges[u]) {
       const edge = topo.edges[e];
       const v = edge.a === u ? edge.b : edge.a;
@@ -119,8 +128,9 @@ function spanningForest(topo: MeshTopology, edgeSet: Set<number>): Set<number> {
 }
 
 /**
- * Plan the cut set: necessity → connection (MST of metric closure) → wedge
- * rule for δ<0 → per-vertex action tags.
+ * Plan the cut set: necessity → connection (MST of metric closure, ≤1
+ * boundary attachment, interior paths never transit the boundary) →
+ * per-vertex action tags. δ<0 closure is handled by K1 vents in the unfold.
  */
 export function planCuts(
   mesh: TriMesh,
@@ -159,8 +169,12 @@ export function planCuts(
     // --- Connection: MST of the terminals' metric closure -----------------
     // Boundary acts as one extra pseudo-terminal reachable at the distance to
     // the nearest boundary vertex (multi-source Dijkstra).
+    // Terminal-to-terminal paths must not pass THROUGH boundary vertices
+    // (K2 connectivity: a cut path transiting the boundary tears the sheet).
     const sols = new Map<number, ShortestPathResult>();
-    for (const t of cutTerminals) sols.set(t, shortestPaths(mesh, topo, [t], weights));
+    for (const t of cutTerminals) {
+      sols.set(t, shortestPaths(mesh, topo, [t], weights, topo.boundaryVertices));
+    }
     const boundarySol = hasBoundary
       ? shortestPaths(mesh, topo, [...topo.boundaryVertices], weights)
       : null;
@@ -223,24 +237,10 @@ export function planCuts(
     }
   }
 
-  // --- Wedge rule: every wedge at a δ<0 vertex must span < 2π -------------
-  // A δ<0 vertex carries total angle 2π−δ > 2π. With cut-degree ≤ 1 it keeps
-  // a single wedge of that full angle (cut endpoints don't split fans), so we
-  // add separators through the middle of the worst wedge until all embed.
-  const WEDGE_MARGIN = 1e-9;
-  for (let v = 0; v < n; v++) {
-    if (defects.classes[v] !== "negative") continue;
-    let guard = 0;
-    for (;;) {
-      const wedges = vertexWedges(mesh, topo, v, (e) => cutSet.has(e));
-      const worst = wedges.reduce((a, b) => (b.angle > a.angle ? b : a), wedges[0]);
-      if (wedges.length >= 2 && worst.angle < TAU - WEDGE_MARGIN) break;
-      if (++guard > topo.vertexEdges[v].length) {
-        throw new PipelineError("plan-cuts", `wedge rule failed to converge at vertex ${v}`, { vertex: v });
-      }
-      cutSet.add(splitEdgeForWedge(mesh, topo, v, worst, cutSet));
-    }
-  }
+  // δ<0 closure: handled by K1 VENTS in the unfold — a slit reaching v
+  // (cut-degree ≥ 1, guaranteed: every terminal is on the tree or its
+  // dangling-slit special case) plus a sliver of |δ| removed makes the flat
+  // material at v exactly 2π. No fan-splitting wedge rule, no extra tears.
 
   const cutEdges = [...cutSet].sort((a, b) => a - b);
   const lengthCost = cutEdges.reduce((acc, e) => acc + edgeLength(mesh, topo, e), 0);
@@ -251,33 +251,3 @@ export function planCuts(
   };
 }
 
-/**
- * Pick the not-yet-cut separator edge nearest the angular middle of `wedge`
- * at vertex v. Separator candidates are the edges between consecutive wedge
- * faces (interior to the wedge by construction).
- */
-function splitEdgeForWedge(
-  mesh: TriMesh,
-  topo: MeshTopology,
-  v: number,
-  wedge: { faces: number[]; angle: number },
-  cutSet: Set<number>,
-): number {
-  const half = wedge.angle / 2;
-  let acc = 0;
-  let fallback = -1;
-  for (let i = 0; i < wedge.faces.length - 1; i++) {
-    const f = wedge.faces[i];
-    const g = wedge.faces[i + 1];
-    acc += faceAngles(mesh, f)[mesh.faces[f].indexOf(v)];
-    const shared = mesh.faces[f].filter((x) => mesh.faces[g].includes(x) && x !== v)[0];
-    const e = topo.edgeIndex.get(shared < v ? `${shared}_${v}` : `${v}_${shared}`)!;
-    if (cutSet.has(e)) continue;
-    if (acc >= half) return e;
-    fallback = e;
-  }
-  if (fallback === -1) {
-    throw new PipelineError("plan-cuts", `no splittable edge in wedge at vertex ${v}`, { vertex: v });
-  }
-  return fallback;
-}

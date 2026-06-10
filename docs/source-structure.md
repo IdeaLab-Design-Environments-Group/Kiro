@@ -20,10 +20,12 @@ src/
     model-loader.ts
     pattern-service.ts
     sim-scene-service.ts
+    svg-export-service.ts
   model/
     app-store.ts
     derive-facts.ts
     fkld-metadata.ts
+    fkld-svg-export.ts
     fold-file.ts
   pipeline/
     conditioning.ts
@@ -57,6 +59,7 @@ src/
   view/
     convert-panel.ts
     dom.ts
+    export-modal.ts
     header-actions.ts
     metadata-panel.ts
     sim-canvas.ts
@@ -110,6 +113,7 @@ New features land here, not in the controller.
 | `model-loader.ts` | Text→`LoadedModel` parsing, FileReader IO (callback-style by design), sample fetching, loaded-status strings. |
 | `pattern-service.ts` | Single facade over BOTH creation paths — the M1–M5 pipeline (`kirigamizeMesh`) and the AKDE creation pipeline (`createAkdePyramid`) — returning a narrow `PatternOutcome`. |
 | `sim-scene-service.ts` | `resolveSimScene(model, shown)` — pure policy for what the 3D Sim folds. |
+| `svg-export-service.ts` | `resolveSvgExport(model, shown)` — pure policy for what SVG export targets. |
 
 Rules:
 
@@ -126,6 +130,7 @@ Rules:
 | `fold-file.ts` | Minimal FOLD/FKLD types and `isFkld`. |
 | `derive-facts.ts` | Loaded model to Derived panel rows. |
 | `fkld-metadata.ts` | FOLD/FKLD object to metadata panel sections. |
+| `fkld-svg-export.ts` | FOLD/FKLD flat pattern to cut/score SVG payload. |
 
 Kirigami geometry/types (`KirigamiState`, `computeState`, …) live in
 `@kirigami/model` — the single source of truth. The former `src/model/types.ts`
@@ -149,6 +154,7 @@ Rules:
 | `convert-panel.ts` | File dropzone, status line, Derived rows. |
 | `metadata-panel.ts` | FKLD metadata rendering. |
 | `viewer-frame.ts` | Embedded FKLD viewer iframe and postMessage bridge. |
+| `export-modal.ts` | SVG export modal with previews and downloads. |
 | `header-actions.ts` | Header buttons and intent callbacks. |
 | `sim-modal.ts` | 3D simulation modal shell and fold slider. |
 | `sim-canvas.ts` | Three.js/WebGL simulation rendering and animation policy. |

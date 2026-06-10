@@ -8,8 +8,9 @@ geometry or rendering algorithms.
 | File | Role |
 | --- | --- |
 | `src/main.ts` | Composition root. Instantiates store, views, controller. |
-| `src/controller/app-controller.ts` | Main orchestration controller. |
+| `src/controller/app-controller.ts` | Thin orchestration controller. |
 | `src/model/app-store.ts` | Observable state container consumed by the controller. |
+| `src/services/*` | Use-case logic called by the controller. |
 | `src/view/header-actions.ts` | Header buttons: 3D Sim slot, Create pyramid, Load sample, Kirigamize. |
 | `src/view/convert-panel.ts` | File dropzone, status, derived facts list. |
 
@@ -18,12 +19,10 @@ geometry or rendering algorithms.
 The app shell:
 
 - wires all view callbacks;
-- reads files through `FileReader`;
-- decides whether an input is FOLD/FKLD, OBJ, STL, or unsupported;
+- delegates file reads/parsing to `model-loader`;
 - updates `AppStore`;
 - routes already-foldable objects directly to the viewer;
-- routes mesh objects through `kirigamizeText`;
-- creates AKDE sample pyramids through the legacy creation pipeline;
+- delegates mesh conversion and AKDE creation to `pattern-service`;
 - provides the currently displayed viewer model to the simulation modal.
 
 It does not:
@@ -53,6 +52,7 @@ HeaderActions / ConvertPanel
 | Load sample | `HeaderActions` | `loadSample` | Fetch bundled FKLD sample and show it. |
 | Kirigamize | `HeaderActions` | `kirigamize` | Pass through FOLD/FKLD or convert mesh. |
 | Open 3D Sim | `SimModal` | provider callback | Build scene from viewer/current model. |
+| Export SVG | `ExportModal` | provider callback | Export viewer/current model cut/score SVG. |
 
 ## State Model
 
@@ -86,4 +86,3 @@ only.
 | File read failure | `FileReader.onerror` | Status: could not read file. |
 | Pipeline failure | `kirigamize` catch | Status: `<stage>: <message>`. |
 | Sample fetch failure | `loadSample` catch | Non-fatal status message. |
-

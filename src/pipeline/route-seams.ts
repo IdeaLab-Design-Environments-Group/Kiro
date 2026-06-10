@@ -1,29 +1,25 @@
 /**
- * Seam routing & packing (M4): the flattened cut mesh → one classified sheet.
+ * Sheet placement & classification (M4/K3): the flattened single-sheet
+ * kirigami → one placed, classified pattern inside its paper rectangle.
  *
- * Pattern: functional core — packing is a pure function of patch bboxes;
+ * Pattern: functional core — placement is a pure translation (the K2 planner
+ * guarantees ONE connected piece; multi-patch shelf packing is gone), and
  * classification is a deterministic mapping pinned by tests.
  *
- * Packing decision: bbox shelf packing (sort by height, fill rows).
- * (Rejected: Tutte embedding of the patch-adjacency graph — a whole module
- * for the usually-1-patch case; revisit if multi-sheet nesting lands.)
+ * Fold-angle targets are measured on the GOAL POSE (sheet faces + goalPos)
+ * rather than looked up on source edges — uniform for synthesized vent
+ * vertices (origVertex −1) and exactly the dihedral the crease must reach.
  *
- * Cut-subtype mapping (deterministic): for a cut edge, look at its source
- * endpoints' defects —
- *   min δ < −FLAT_EPS → "minor"  (negative wins on mixed: the slit exists to
- *                                 ADD angle at a δ<0 vertex)
- *   max δ > +FLAT_EPS → "dart"   (cut+overlap discards surplus angle)
- *   otherwise         → "seam"   (pure connection/relief through flat verts)
- * "major"/"tab" are not emitted by the general pipeline (major stays
- * AKDE-pyramid-specific; sealed gusset strips are deferred — open slits
- * realize δ<0, per the proposal's honest scope). In the FOLDED state every
- * v1 cut seals (its lips return to the shared source edge); openness is a
- * flat-state property.
+ * Cut-subtype mapping (deterministic):
+ *   vent-boundary edges (from K1 VentRecords)        → "vent"
+ *   lip edges with a δ>0 endpoint                    → "dart"
+ *   remaining lip edges (zero-width slits that seal) → "seam"
+ * The ∂Q-derived outline stays "B". ("minor"/"major" are retired from the
+ * general pipeline — they remain AKDE-pyramid vocabulary.)
  */
 
 import { buildTopology, edgeKey } from "./mesh.js";
-import { FLAT_EPS } from "./curvature.js";
-import { targetFoldAngles } from "./curvature.js";
+import { FLAT_EPS, signedDihedral } from "./curvature.js";
 import {
   PipelineError,
   type CutType,
@@ -45,72 +41,53 @@ export interface PackContext {
 }
 
 /**
- * Translate patches apart (shelf packing), derive sheet edges, classify
- * every edge (M/V/F/B/C), attach fold-angle targets and cut subtypes.
+ * Place the single-sheet pattern in the positive quadrant with `marginMm` of
+ * paper around it, derive sheet edges, classify (M/V/F/B/C + subtypes), and
+ * attach goal-pose fold targets.
  */
-export function packPatches(unfold: UnfoldResult, ctx: PackContext, marginMm = 5): Sheet {
-  const { mesh, topo, defects } = ctx;
-
-  // --- vertex → patch (each cut-mesh vertex belongs to exactly one patch) --
-  const patchOfVertex = new Array<number>(unfold.flat.length).fill(-1);
-  for (let f = 0; f < unfold.faces.length; f++) {
-    for (const v of unfold.faces[f]) patchOfVertex[v] = unfold.patchOfFace[f];
+export function placeSheet(unfold: UnfoldResult, ctx: PackContext, marginMm = 5): Sheet {
+  const { topo, defects } = ctx;
+  if (unfold.patchCount !== 1) {
+    throw new PipelineError("route-seams", `expected one connected sheet, got ${unfold.patchCount} pieces`);
   }
 
-  // --- shelf packing of patch bboxes ---------------------------------------
-  const boxes = Array.from({ length: unfold.patchCount }, () => ({
-    minX: Infinity,
-    minY: Infinity,
-    maxX: -Infinity,
-    maxY: -Infinity,
-  }));
-  for (let v = 0; v < unfold.flat.length; v++) {
-    const p = patchOfVertex[v];
-    if (p === -1) continue;
-    const b = boxes[p];
-    b.minX = Math.min(b.minX, unfold.flat[v].x);
-    b.maxX = Math.max(b.maxX, unfold.flat[v].x);
-    b.minY = Math.min(b.minY, unfold.flat[v].y);
-    b.maxY = Math.max(b.maxY, unfold.flat[v].y);
+  // --- placement: translate the pattern into the paper rectangle -----------
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of unfold.flat) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
   }
-  const order = boxes
-    .map((b, p) => ({ p, w: b.maxX - b.minX, h: b.maxY - b.minY }))
-    .sort((a, b) => b.h - a.h);
-  const sheetWidth = Math.max(...order.map((o) => o.w)) * 2 + 4 * marginMm; // 2 widest per row
-  const offsets: Vec2[] = new Array(unfold.patchCount);
-  let cursorX = marginMm;
-  let cursorY = marginMm;
-  let rowH = 0;
-  for (const { p, w, h } of order) {
-    if (cursorX > marginMm && cursorX + w + marginMm > sheetWidth) {
-      cursorX = marginMm;
-      cursorY += rowH + marginMm;
-      rowH = 0;
-    }
-    offsets[p] = { x: cursorX - boxes[p].minX, y: cursorY - boxes[p].minY };
-    cursorX += w + marginMm;
-    rowH = Math.max(rowH, h);
-  }
+  const offX = marginMm - minX;
+  const offY = marginMm - minY;
+  const vertices: Vec2[] = unfold.flat.map((p) => ({ x: p.x + offX, y: p.y + offY }));
+  const sheetRect = {
+    widthMm: maxX - minX + 2 * marginMm,
+    heightMm: maxY - minY + 2 * marginMm,
+    marginMm,
+  };
 
-  const vertices: Vec2[] = unfold.flat.map((pt, v) => {
-    const off = offsets[patchOfVertex[v]] ?? { x: 0, y: 0 };
-    return { x: pt.x + off.x, y: pt.y + off.y };
-  });
-
-  // --- sheet edges from the cut-mesh faces (z=0 lift reuses buildTopology) --
+  // --- sheet edges (index-based; coincident slit lips stay distinct) -------
   const sheetTopo = buildTopology({
     vertices: vertices.map((p) => ({ x: p.x, y: p.y, z: 0 })),
     faces: unfold.faces,
   });
 
-  // Lip edge lookup: cut-mesh vertex pair key → its lip (cut subtype source).
-  const lipEdge = new Map<string, number>(); // key → source edge id
-  for (const lip of unfold.lips) {
-    lipEdge.set(edgeKey(lip.lipA[0], lip.lipA[1]), lip.sourceEdge);
-    lipEdge.set(edgeKey(lip.lipB[0], lip.lipB[1]), lip.sourceEdge);
-  }
+  // Goal-pose mesh: fold targets are dihedrals measured where the sheet must
+  // land — well-defined for every interior edge incl. vent-split sub-edges.
+  const goalMesh: TriMesh = { vertices: unfold.goalPos, faces: unfold.faces };
 
-  const sourceTargets = targetFoldAngles(mesh, topo);
+  // Edge-key lookups for classification.
+  const lipKeys = new Map<string, number>(); // key → source edge id
+  for (const lip of unfold.lips) {
+    lipKeys.set(edgeKey(lip.lipA[0], lip.lipA[1]), lip.sourceEdge);
+    lipKeys.set(edgeKey(lip.lipB[0], lip.lipB[1]), lip.sourceEdge);
+  }
+  const ventKeys = new Set<string>();
+  for (const vent of unfold.vents) {
+    for (const [a, b] of vent.ventEdges) ventKeys.add(edgeKey(a, b));
+  }
 
   const assignment: Sheet["assignment"] = [];
   const foldAngle: Sheet["foldAngle"] = [];
@@ -120,28 +97,21 @@ export function packPatches(unfold: UnfoldResult, ctx: PackContext, marginMm = 5
     const edge = sheetTopo.edges[e];
     const key = edgeKey(edge.a, edge.b);
     if (edge.faces.length === 1) {
-      const src = lipEdge.get(key);
-      if (src !== undefined) {
+      if (ventKeys.has(key)) {
         assignment.push("C");
         foldAngle.push(null);
-        cutType.push(cutSubtypeFor(topo, defects, src));
+        cutType.push("vent");
+      } else if (lipKeys.has(key)) {
+        assignment.push("C");
+        foldAngle.push(null);
+        cutType.push(lipSubtype(topo, defects, lipKeys.get(key)!));
       } else {
-        assignment.push("B"); // original ∂Q boundary
+        assignment.push("B"); // original ∂Q boundary (cut from the sheet rect)
         foldAngle.push(null);
         cutType.push(null);
       }
     } else {
-      // Interior sheet edge ↔ un-cut interior source edge.
-      const srcA = unfold.origVertex[edge.a];
-      const srcB = unfold.origVertex[edge.b];
-      const srcE = topo.edgeIndex.get(edgeKey(srcA, srcB));
-      if (srcE === undefined) {
-        throw new PipelineError("route-seams", `interior sheet edge ${key} has no source edge ${srcA}-${srcB}`);
-      }
-      const theta = sourceTargets[srcE];
-      if (theta === null) {
-        throw new PipelineError("route-seams", `source edge ${srcE} unexpectedly boundary`);
-      }
+      const theta = signedDihedral(goalMesh, sheetTopo, e);
       assignment.push(theta > FLAT_EPS ? "M" : theta < -FLAT_EPS ? "V" : "F");
       foldAngle.push(theta);
       cutType.push(null);
@@ -156,17 +126,17 @@ export function packPatches(unfold: UnfoldResult, ctx: PackContext, marginMm = 5
     foldAngle,
     cutType,
     origVertex: unfold.origVertex,
+    goalPos: unfold.goalPos,
     lips: unfold.lips,
+    vents: unfold.vents,
     patchOfFace: unfold.patchOfFace,
+    sheetRect,
   };
 }
 
-/** The deterministic cut-subtype rule (see module doc). Exported for tests. */
-export function cutSubtypeFor(topo: MeshTopology, defects: DefectReport, sourceEdge: number): CutType {
+/** Lip subtype: dart (δ>0 endpoint) or seam (zero-width slit that seals). */
+export function lipSubtype(topo: MeshTopology, defects: DefectReport, sourceEdge: number): CutType {
   const { a, b } = topo.edges[sourceEdge];
-  const da = defects.defects[a];
-  const db = defects.defects[b];
-  if (Math.min(da, db) < -FLAT_EPS) return "minor";
-  if (Math.max(da, db) > FLAT_EPS) return "dart";
+  if (Math.max(defects.defects[a], defects.defects[b]) > FLAT_EPS) return "dart";
   return "seam";
 }

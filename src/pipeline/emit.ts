@@ -80,11 +80,12 @@ export function emitFkld(sheet: Sheet, opts: EmitOptions): FoldFile {
   const edges_foldAngle = sheet.foldAngle.map((t) => (t === null ? null : (t * 180) / Math.PI));
   const faces_vertices = sheet.faces.map((f) => [...f]);
 
-  // --- FKLD per-vertex arrays (provenance through origVertex) ---------------
-  const angleDefect = sheet.origVertex.map((src) => defects.defects[src]);
-  const curvatureClass = sheet.origVertex.map((src) => defects.classes[src]);
+  // --- FKLD per-vertex arrays (provenance through origVertex; synthesized
+  // vent vertices carry origVertex −1 → defect 0 / class "boundary") --------
+  const angleDefect = sheet.origVertex.map((src) => (src >= 0 ? defects.defects[src] : 0));
+  const curvatureClass = sheet.origVertex.map((src) => (src >= 0 ? defects.classes[src] : "boundary"));
   const reliefStrategy = sheet.origVertex.map((src) => {
-    const action = opts.actions?.[src] ?? "none";
+    const action = src >= 0 ? (opts.actions?.[src] ?? "none") : "none";
     return action === "tuck" ? "molecule" : action === "none" ? "none" : "cut";
   });
 
@@ -108,11 +109,8 @@ export function emitFkld(sheet: Sheet, opts: EmitOptions): FoldFile {
     }
   }
 
-  // --- guided-fold goal frame -----------------------------------------------
-  const goal3D = sheet.origVertex.map((src) => {
-    const p = target.vertices[src];
-    return [p.x, p.y, p.z];
-  });
+  // --- guided-fold goal frame (goalPos carries synthesized vent vertices) ---
+  const goal3D = sheet.goalPos.map((p) => [p.x, p.y, p.z]);
   // Every sheet-boundary vertex (lips + ∂Q) is driven — the DETC forward
   // process. Interior vertices stay free and relax (see module doc for why
   // verification leans on strain + crease residuals rather than d_H alone).
@@ -149,6 +147,8 @@ export function emitFkld(sheet: Sheet, opts: EmitOptions): FoldFile {
       source: "kirigamize",
       lambda: opts.lambda ?? 0,
       strategy: opts.strategy ?? "dart",
+      // The rectangle of paper this kirigami is cut from (K3).
+      sheet: { ...sheet.sheetRect },
     },
     [DRIVEN_KEY]: driven,
     file_frames: [
