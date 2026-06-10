@@ -18,13 +18,14 @@ import { POSITION_SHADER, VELOCITY_SHADER } from "./shaders.js";
 export class GpuFoldSolver {
   readonly dt: number;
   foldPercent = 0;
-  /** Per-node quick-min relaxation: drives the frustrated kirigami interior to a still rest. */
-  quench = true;
+  /** Global-quench (Otter) kinetic-energy tracker, used by relax(). */
+  private prevKE = Infinity;
   private readonly gpu: GPUComputationRenderer;
   private readonly posVar: ReturnType<GPUComputationRenderer["addVariable"]>;
   private readonly velVar: ReturnType<GPUComputationRenderer["addVariable"]>;
   private readonly packed: PackedModel;
   private readonly buffer: Float32Array;
+  private readonly velBuffer: Float32Array;
 
   private constructor(
     private readonly model: BarHingeModel,
@@ -35,6 +36,7 @@ export class GpuFoldSolver {
     this.packed = packed;
     const [W, H] = packed.dim;
     this.buffer = new Float32Array(W * H * 4);
+    this.velBuffer = new Float32Array(W * H * 4);
 
     const gpu = new GPUComputationRenderer(W, H, renderer);
     this.gpu = gpu;
@@ -80,7 +82,7 @@ export class GpuFoldSolver {
       uDt: { value: this.dt },
       uFoldPercent: { value: 0 },
       uKFace: { value: model.params.kFace },
-      uQuench: { value: 1 },
+      uReset: { value: 0 },
     };
     for (const variable of [posVar, velVar]) {
       Object.assign((variable.material as THREE.ShaderMaterial).uniforms, structuredCloneUniforms(shared));
@@ -105,9 +107,55 @@ export class GpuFoldSolver {
     for (const variable of [this.posVar, this.velVar]) {
       const u = (variable.material as THREE.ShaderMaterial).uniforms;
       if (u.uFoldPercent) u.uFoldPercent.value = this.foldPercent;
-      if (u.uQuench) u.uQuench.value = this.quench ? 1 : 0;
     }
     for (let i = 0; i < n; i++) this.gpu.compute();
+  }
+
+  /** Total kinetic energy Σ|v|² (reads the velocity texture back). */
+  private velocityKE(): number {
+    const [W, H] = this.packed.dim;
+    const rt = this.gpu.getCurrentRenderTarget(this.velVar);
+    this.renderer.readRenderTargetPixels(rt, 0, 0, W, H, this.velBuffer);
+    let ke = 0;
+    for (let i = 0; i < this.model.numNodes; i++) {
+      const vx = this.velBuffer[4 * i];
+      const vy = this.velBuffer[4 * i + 1];
+      const vz = this.velBuffer[4 * i + 2];
+      ke += vx * vx + vy * vy + vz * vz;
+    }
+    return ke;
+  }
+
+  /** Set/unset uReset on both variable materials. */
+  private setReset(on: boolean): void {
+    for (const variable of [this.posVar, this.velVar]) {
+      const u = (variable.material as THREE.ShaderMaterial).uniforms;
+      if (u.uReset) u.uReset.value = on ? 1 : 0;
+    }
+  }
+
+  /**
+   * Global Otter quench, the GPU twin of the CPU `kineticDamp`: when total kinetic energy stops
+   * rising the mesh has passed an equilibrium, so run one **reset pass** (uReset=1) that zeros every
+   * velocity and holds position. Repeated each frame this drains a frustrated kirigami fold to a
+   * true static rest, which plain viscous ζ never reaches (it limit-cycles → the jitter). Call once
+   * per frame after `step()` + `readInto()`.
+   */
+  relax(): void {
+    const ke = this.velocityKE();
+    if (ke < this.prevKE) {
+      this.setReset(true);
+      this.gpu.compute();
+      this.setReset(false);
+      this.prevKE = 0;
+    } else {
+      this.prevKE = ke;
+    }
+  }
+
+  /** Restart the quench tracker (e.g. when the fold target changes / the slider is scrubbed). */
+  resetSettle(): void {
+    this.prevKE = Infinity;
   }
 
   /** Read current GPU positions back into `model.position` (3·numNodes). */

@@ -236,36 +236,18 @@ function addScaled(F: Float32Array, i: number, v: V3, k: number): void {
   F[3 * i + 2] += v.z * k;
 }
 
-/**
- * Pass 4 — explicit forward Euler: v += (F/m)·dt; p += v·dt (paper §2.5).
- *
- * `quench` enables **per-node quick-min relaxation** (the kirigami-fit extension of Gershenfeld's
- * model): after updating a node's velocity, if it now opposes the net force (v·F < 0) the node has
- * overshot its local force balance, so its velocity is zeroed. This descends a *frustrated* mesh —
- * a concrete kirigami fold, where cut-induced floppy DOF and the driven boundary leave no
- * force-balanced state reachable by damping alone — to a TRUE static rest, instead of orbiting a
- * limit cycle forever (the source of the residual sim twitch). Default off, so the bare integrator
- * (and every test that calls it) is byte-for-byte the original; the live view turns it on.
- */
-export function integrate(m: BarHingeModel, dt: number, quench = false): void {
+/** Pass 4 — explicit forward Euler: v += (F/m)·dt; p += v·dt (paper §2.5). */
+export function integrate(m: BarHingeModel, dt: number): void {
   const F = m.force;
   for (let i = 0; i < m.numNodes; i++) {
     if (m.fixed[i]) continue;
     const invM = 1 / m.mass[i];
-    let vx = m.velocity[3 * i] + F[3 * i] * invM * dt;
-    let vy = m.velocity[3 * i + 1] + F[3 * i + 1] * invM * dt;
-    let vz = m.velocity[3 * i + 2] + F[3 * i + 2] * invM * dt;
-    if (quench && vx * F[3 * i] + vy * F[3 * i + 1] + vz * F[3 * i + 2] < 0) {
-      vx = 0;
-      vy = 0;
-      vz = 0;
-    }
-    m.velocity[3 * i] = vx;
-    m.velocity[3 * i + 1] = vy;
-    m.velocity[3 * i + 2] = vz;
-    m.position[3 * i] += vx * dt;
-    m.position[3 * i + 1] += vy * dt;
-    m.position[3 * i + 2] += vz * dt;
+    m.velocity[3 * i] += (F[3 * i] * invM) * dt;
+    m.velocity[3 * i + 1] += (F[3 * i + 1] * invM) * dt;
+    m.velocity[3 * i + 2] += (F[3 * i + 2] * invM) * dt;
+    m.position[3 * i] += m.velocity[3 * i] * dt;
+    m.position[3 * i + 1] += m.velocity[3 * i + 1] * dt;
+    m.position[3 * i + 2] += m.velocity[3 * i + 2] * dt;
   }
 }
 
