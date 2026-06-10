@@ -7,27 +7,48 @@
  * stays a UI accelerator). The simulator is the oracle: a pattern is correct
  * when it folds to the target, not when it merely looks right on paper.
  *
- * What "verified" means here (v1): EQUILIBRIUM verification. The model is
- * initialized AT the goal pose (driven boundary held there by the DETC
- * forward process at foldPercent = 1, free vertices placed at their goals)
- * and relaxed until settled. A correct pattern is a stable equilibrium —
- * bars at rest length, creases at their goal dihedrals — so it stays; a
- * wrong pattern (non-isometric unfold, wrong lips/packing, M/V or angle
- * errors) pushes itself away and fails on d_H, strain, or crease residual.
+ * What "verified" means here: TWO-PHASE FOLD-FROM-FLAT (primary) plus an
+ * EQUILIBRIUM check (secondary).
  *
- * Why not fold-path simulation from flat: with the scaffold driven, the
- * solver's momentum-conserving crease reactions act on free crease nodes in
- * the direction OPPOSITE their wings — with wings pinned this actively
- * pushes free fold lines toward the mirror side, a structural limitation of
- * driving + the bar-and-hinge torque model (verified empirically on a tent
- * ridge). Path verification needs collision handling / a constraint solver —
- * future work, per the proposal's honest scope ("no constructive
- * flat-foldability guarantee").
+ * Fold-from-flat, phase A — kinematic transport: EVERY vertex is driven
+ * (model.goal is fully populated from the emitted goal frame) linearly
+ * rest→goal as foldPercent eases 0→1. This demonstrates a continuous,
+ * isometry-auditable motion from the flat sheet: by the triangle inequality
+ * |(1−fp)·d₀ + fp·d₁| ≤ l₀ whenever |d₀| = |d₁| = l₀, so a CONSISTENT
+ * pattern never lengthens a bar along the path — the mean TENSILE strain
+ * sampled at fp = 0.25/0.5/0.75 (recorded as `pathStrain`, max of the three)
+ * is ≈ 0 iff rest and goal lengths agree. (The unsigned mid-path strain is
+ * NOT usable: linear interpolation of a face rotation φ shortens chords by
+ * ≈ 1 − cos(φ/2) even on a perfect pattern — ~31% mean on the cube.)
+ *
+ * Fold-from-flat, phase B — release-and-settle: at fp = 1 the original
+ * driven flags are restored (only sheet-boundary vertices stay pinned),
+ * velocities are zeroed, and the solver relaxes until settled. The folded
+ * state must HOLD under the pattern's own bars/creases — the real physics
+ * gate. Metrics are measured after phase B. A wrong pattern (non-isometric
+ * unfold, wrong lips/packing, M/V or angle errors) pushes itself away and
+ * fails on d_H, strain, or crease residual.
+ *
+ * Why two phases instead of driving only the sheet boundary the whole way:
+ * with the scaffold driven, the solver's momentum-conserving crease
+ * reactions act on free crease nodes in the direction OPPOSITE their wings —
+ * with wings pinned this actively pushes FREE interior fold-line vertices
+ * (e.g. a tent ridge, intrinsically flat so never cut) toward the mirror
+ * side, so the ridge never rises (verified empirically). Phase A transports
+ * such vertices kinematically; phase B proves they are mechanically stable.
  *
  * d_H decision: sampled symmetric Hausdorff over vertices ∪ edge midpoints ∪
  * face centroids, brute-force min point–triangle distance (coarse meshes —
  * no BVH). Vertex-only sampling would miss interior bulge, the very failure
  * mode the sim must catch; exact Hausdorff is overkill.
+ *
+ * Open kirigami / vent-aware d_H: at δ<0 vertices a VENT removes a sliver of
+ * Q-coverage, so the folded surface legitimately has a small HOLE there —
+ * coverage holes at declared vents are NOT coverage errors. The folded→Q
+ * directed distance stays full strength (the sheet must lie ON Q), but
+ * Q→folded samples within `radiusMm` of a declared vent center (see
+ * `VentHole`, computed by kirigamize.ts from the unfold's VentRecords) are
+ * skipped. Patterns without vents keep the plain symmetric metric.
  *
  * Frame alignment: buildSceneFromFold normalizes the flat pattern by its
  * bbox centroid and scale = TARGET_SIZE/span, and applyGuidedFold transforms
@@ -36,10 +57,25 @@
  * pins the global pose, so no ICP is needed). ε_sim = ε_mm · scale.
  */
 
-import { buildSceneFromFold, measureTheta } from "../sim/index.js";
+import { buildSceneFromFold, measureTheta, FoldSolver } from "../sim/index.js";
 import type { FoldFile } from "../model/fold-file.js";
 import type { TriMesh, Vec3, VerifyReport } from "./types.js";
 import { PipelineError } from "./types.js";
+
+/**
+ * A declared coverage hole on Q (open kirigami): the region of Q left
+ * uncovered by a vent sliver removed at a δ<0 vertex. Q→folded d_H samples
+ * inside the ball (center, radiusMm) are skipped — see the module doc.
+ */
+export interface VentHole {
+  /** Hole location on Q — the vent's source vertex position (mm, Q frame). */
+  center: Vec3;
+  /** Conservative hole radius: max goal-space distance from the vent vertex
+   *  to its ventEdges' endpoints (mm). The removed slivers are sub-triangles
+   *  with apex at the center and far vertices at those endpoints, so the
+   *  whole hole lies within this ball. */
+  radiusMm: number;
+}
 
 export interface VerifyOptions {
   /** ε as a fraction of Q's bbox diagonal. */
@@ -50,6 +86,12 @@ export interface VerifyOptions {
   strainTol: number;
   /** Max acceptable mean crease-angle residual (rad). */
   creaseTol: number;
+  /**
+   * Declared vent holes on Q (open kirigami) — Q→folded d_H samples inside
+   * any of these balls are not coverage errors. Default: none (plain
+   * symmetric d_H).
+   */
+  vents?: VentHole[];
 }
 
 export const DEFAULT_VERIFY: VerifyOptions = {
@@ -133,10 +175,15 @@ interface SampledMesh {
   f: [number, number, number][];
 }
 
-function supDistance(from: SampledMesh, to: SampledMesh): { d: number; worstSample: Vec3 } {
+function supDistance(
+  from: SampledMesh,
+  to: SampledMesh,
+  skip?: (p: Vec3) => boolean,
+): { d: number; worstSample: Vec3 } {
   let worst = 0;
   let worstSample = from.v[0];
   for (const p of samplePoints(from.v, from.f)) {
+    if (skip?.(p)) continue;
     let best = Infinity;
     for (const [i, j, k] of to.f) {
       const d = pointTriangleDistance(p, to.v[i], to.v[j], to.v[k]);
@@ -242,7 +289,51 @@ interface SceneMetrics {
   worstSample: Vec3;
 }
 
-/** Strain + crease residual + aligned d_H of a settled scene vs targetSim. */
+/**
+ * Rescale a built scene to span ≈ `targetSpan` sim units. The explicit
+ * solver's Δt bound (paper Eqs 7–8) covers only the axial mode and assumes
+ * k_axial = EA/l₀ ≫ k_crease = 0.7·l₀ — true at unit scale but violated at
+ * large normalization spans (l₀ ≈ 25 ⇒ creases 20× stiffer than the bound
+ * assumes ⇒ free folds explode). Verification therefore always runs in the
+ * stable regime regardless of the adapter's display normalization.
+ * Returns a fresh solver (Δt recomputed for the scaled stiffnesses).
+ */
+function rescaleScene(scene: ReturnType<typeof buildSceneFromFold>, targetSpan = 2): void {
+  const net = scene.net;
+  let span = 0;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const v of net.vertices) {
+    minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
+    minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
+    minZ = Math.min(minZ, v.z); maxZ = Math.max(maxZ, v.z);
+  }
+  span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1e-9);
+  const s = targetSpan / span;
+  if (Math.abs(s - 1) < 1e-9) return;
+  const m = scene.model;
+  for (let i = 0; i < m.position.length; i++) {
+    m.position[i] *= s;
+    m.rest[i] *= s;
+    m.goal[i] *= s;
+  }
+  for (const v of net.vertices) {
+    v.x *= s; v.y *= s; v.z *= s;
+  }
+  for (let i = 0; i < m.beams.count; i++) {
+    m.beams.rest[i] *= s;
+    m.beams.k[i] /= s; // k_axial = EA/l₀
+  }
+  for (let i = 0; i < m.creases.count; i++) {
+    m.creases.k[i] *= s; // k_crease = (1−cut)·k·l₀
+  }
+  net.meta.scale *= s; // sim-units-per-mm stays consistent for dH conversion
+  // Fresh solver: Δt depends on the (now smaller) stiffness spectrum.
+  scene.solver = new FoldSolver(m);
+}
+
+/** Strain + crease residual + aligned d_H of a settled scene vs targetSim.
+ *  `ventSkip` excludes declared vent-hole samples from the Q→folded
+ *  direction only (open kirigami — see the module doc). */
 function measureScene(
   scene: ReturnType<typeof buildSceneFromFold>,
   targetSim: SampledMesh,
@@ -250,6 +341,7 @@ function measureScene(
   bboxDiag: number,
   iterations: number,
   settled: boolean,
+  ventSkip?: (p: Vec3) => boolean,
 ): SceneMetrics {
   const m = scene.model;
   const pos = m.position;
@@ -296,8 +388,8 @@ function measureScene(
   const { R, t } = kabsch(foldedRaw, goalPts);
   const folded: SampledMesh = { v: foldedRaw.map((p) => applyRigid(R, t, p)), f: scene.net.faces };
 
-  const toTarget = supDistance(folded, targetSim);
-  const fromTarget = supDistance(targetSim, folded);
+  const toTarget = supDistance(folded, targetSim); // sheet must lie ON Q — full strength
+  const fromTarget = supDistance(targetSim, folded, ventSkip); // vent holes are not coverage errors
   const dH = Math.max(toTarget.d, fromTarget.d) / scale; // mm
 
   return {
@@ -314,27 +406,55 @@ function measureScene(
   };
 }
 
+/** Mean tensile bar strain max(l/l₀ − 1, 0) at the model's CURRENT positions
+ *  — the phase-A transport audit (consistent patterns never lengthen a bar
+ *  along the linear rest→goal path; see the module doc). */
+function meanTensileStrain(m: ReturnType<typeof buildSceneFromFold>["model"]): number {
+  const pos = m.position;
+  let sum = 0;
+  for (let i = 0; i < m.beams.count; i++) {
+    const a = m.beams.n0[i];
+    const b = m.beams.n1[i];
+    const l = Math.hypot(
+      pos[3 * a] - pos[3 * b],
+      pos[3 * a + 1] - pos[3 * b + 1],
+      pos[3 * a + 2] - pos[3 * b + 2],
+    );
+    sum += Math.max(0, l / m.beams.rest[i] - 1);
+  }
+  return sum / Math.max(1, m.beams.count);
+}
+
 /**
  * Verify the emitted FKLD against Q two ways (single-shot; the retry
  * schedule lives in kirigamize.ts):
  *
- * 1. FOLD-FROM-FLAT (primary gate): free the model (no driven boundary),
- *    start at the flat rest pose, ramp foldPercent 0→1 driven only by the
- *    goal-derived crease targets — the pattern must actually fold itself up
- *    from the sheet. Kabsch-aligned d_H + strain + crease residual.
+ * 1. FOLD-FROM-FLAT (primary gate), two-phase: (A) kinematic transport —
+ *    EVERY vertex driven linearly rest→goal as foldPercent eases 0→1, with
+ *    the mean tensile strain sampled at fp = 0.25/0.5/0.75 recorded as
+ *    `pathStrain`; (B) release-and-settle — restore the original driven
+ *    flags (sheet boundary only), zero velocities, relax until settled: the
+ *    folded state must HOLD. Kabsch-aligned d_H + strain + crease residual,
+ *    measured after phase B.
  * 2. EQUILIBRIUM (secondary, reported): start at the goal pose, relax, and
  *    measure drift — a cheap consistency check that can never pass alone.
+ *
+ * `opts.vents` declares open-kirigami coverage holes (see VentHole): the
+ * Q→folded direction of d_H skips samples inside them.
  */
 export function verifyFold(
   fkld: FoldFile,
   target: TriMesh,
   opts: Partial<VerifyOptions> = {},
 ): VerifyReport {
-  const { epsilonRel, iterations, strainTol, creaseTol } = { ...DEFAULT_VERIFY, ...opts };
+  const { epsilonRel, iterations, strainTol, creaseTol, vents = [] } = { ...DEFAULT_VERIFY, ...opts };
 
-  // --- shared frame: targetSim via the model's own mm → sim map --------------
-  const probe = buildSceneFromFold(fkld);
-  const scale = probe.net.meta.scale;
+  // --- shared frame: build the rescaled flat scene FIRST and derive the
+  // mm → sim map + targetSim from it (both scenes are rescaled identically,
+  // so the frame is shared) ---------------------------------------------------
+  const flatScene = buildSceneFromFold(fkld);
+  rescaleScene(flatScene);
+  const scale = flatScene.net.meta.scale;
   const frames = fkld.file_frames as
     | { frame_classes?: string[]; vertices_coords?: number[][] }[]
     | undefined;
@@ -344,9 +464,9 @@ export function verifyFold(
   }
   let tx = 0, ty = 0, tz = 0;
   for (let i = 0; i < goalMm.length; i++) {
-    tx += probe.model.goal[3 * i] - (goalMm[i][0] ?? 0) * scale;
-    ty += probe.model.goal[3 * i + 1] - (goalMm[i][1] ?? 0) * scale;
-    tz += probe.model.goal[3 * i + 2] - (goalMm[i][2] ?? 0) * scale;
+    tx += flatScene.model.goal[3 * i] - (goalMm[i][0] ?? 0) * scale;
+    ty += flatScene.model.goal[3 * i + 1] - (goalMm[i][1] ?? 0) * scale;
+    tz += flatScene.model.goal[3 * i + 2] - (goalMm[i][2] ?? 0) * scale;
   }
   tx /= goalMm.length;
   ty /= goalMm.length;
@@ -364,30 +484,84 @@ export function verifyFold(
   const bboxDiag = Math.hypot(qMax.x - qMin.x, qMax.y - qMin.y, qMax.z - qMin.z);
   const epsilon = epsilonRel * bboxDiag;
 
+  // Vent holes mapped into the shared sim frame (open kirigami — the
+  // Q→folded d_H direction skips samples inside them; see the module doc).
+  const ventsSim = vents.map((vt) => ({
+    c: { x: vt.center.x * scale + tx, y: vt.center.y * scale + ty, z: vt.center.z * scale + tz },
+    r: vt.radiusMm * scale * (1 + 1e-9), // float slack; boundary samples lie ON the sheet anyway
+  }));
+  const ventSkip =
+    ventsSim.length > 0
+      ? (p: Vec3): boolean =>
+          ventsSim.some((vt) => Math.hypot(p.x - vt.c.x, p.y - vt.c.y, p.z - vt.c.z) <= vt.r)
+      : undefined;
+
   // free (non-driven) vertices in the guided model — diagnostic only
   let freeVertices = 0;
-  for (let i = 0; i < probe.model.numNodes; i++) if (!probe.model.driven[i]) freeVertices++;
+  for (let i = 0; i < flatScene.model.numNodes; i++) if (!flatScene.model.driven[i]) freeVertices++;
 
-  // --- 1. fold-from-flat (primary) -------------------------------------------
-  // Fresh scene: free every node (no drive, no pins) and let removeRigidBody
-  // keep the free fold from drifting; targets are the goal-derived dihedrals.
-  const flatScene = buildSceneFromFold(fkld);
-  flatScene.model.driven.fill(0);
-  flatScene.model.fixed.fill(0);
-  flatScene.model.velocity.fill(0);
-  const flatSettle = flatScene.solver.solveUntilSettled({
+  // --- 1. fold-from-flat (primary), two-phase ---------------------------------
+  // Phase A — kinematic transport: drive EVERY vertex (model.goal is fully
+  // populated from the emitted goal frame) linearly rest→goal with the normal
+  // quasi-static fp ease. The fold is purely kinematic here, so the only
+  // honest signal is the transport audit: mean TENSILE strain sampled at
+  // fp = 0.25/0.5/0.75, max recorded as pathStrain (≈ 0 iff the pattern is
+  // isometrically consistent — see the module doc). This transports free
+  // interior fold-line vertices (e.g. a tent ridge) that the driven-boundary
+  // forward process structurally cannot raise (mirror-side crease reactions).
+  const fm = flatScene.model;
+  const savedDriven = fm.driven.slice();
+  const savedFixed = fm.fixed.slice();
+  fm.driven.fill(1);
+  fm.fixed.fill(1);
+  fm.velocity.fill(0);
+  const sampleFps = [0.25, 0.5, 0.75];
+  let sampleIdx = 0;
+  let pathStrain = 0;
+  const solver = flatScene.solver;
+  solver.foldPercent = 0;
+  let phaseAIters = 0;
+  const easeRate = 0.004; // solveUntilSettled's default quasi-static ease
+  while (solver.foldPercent < 1 && phaseAIters < iterations) {
+    solver.foldPercent += (1 - solver.foldPercent) * easeRate;
+    if (1 - solver.foldPercent < 1e-6) solver.foldPercent = 1;
+    solver.step(); // all nodes driven+fixed ⇒ pure kinematic placement at fp
+    phaseAIters++;
+    while (sampleIdx < sampleFps.length && solver.foldPercent >= sampleFps[sampleIdx]) {
+      pathStrain = Math.max(pathStrain, meanTensileStrain(fm));
+      sampleIdx++;
+    }
+  }
+
+  // Phase B — release-and-settle: restore the original driven flags (only
+  // sheet-boundary vertices stay pinned at the goal), zero velocities, and
+  // relax at fp = 1. The folded state must HOLD under the pattern's own
+  // bars/creases — the real physics gate; metrics are measured here.
+  fm.driven.set(savedDriven);
+  fm.fixed.set(savedFixed);
+  fm.velocity.fill(0);
+  const flatSettle = solver.solveUntilSettled({
     target: 1,
     maxIters: iterations,
     keEps: 1e-2,
     minSettleIters: 500,
     quench: true,
     guard: true,
-    removeRigidBody: true,
   });
-  const flat = measureScene(flatScene, targetSim, scale, bboxDiag, flatSettle.iters, flatSettle.converged);
+  const flat = measureScene(
+    flatScene,
+    targetSim,
+    scale,
+    bboxDiag,
+    phaseAIters + flatSettle.iters,
+    flatSettle.converged,
+    ventSkip,
+  );
+  flat.metrics.pathStrain = pathStrain;
 
   // --- 2. equilibrium (secondary) ---------------------------------------------
   const eqScene = buildSceneFromFold(fkld);
+  rescaleScene(eqScene);
   eqScene.model.position.set(eqScene.model.goal);
   eqScene.model.velocity.fill(0);
   eqScene.solver.foldPercent = 1;
@@ -399,7 +573,7 @@ export function verifyFold(
     quench: true,
     guard: true,
   });
-  const eq = measureScene(eqScene, targetSim, scale, bboxDiag, eqSettle.iters, eqSettle.converged);
+  const eq = measureScene(eqScene, targetSim, scale, bboxDiag, eqSettle.iters, eqSettle.converged, ventSkip);
 
   // worst source vertex: Q vertex nearest the worst fold-from-flat sample
   let worstSourceVertex = 0;
@@ -427,7 +601,8 @@ export function verifyFold(
       flat.metrics.settled &&
       flat.metrics.dH <= epsilon &&
       flat.metrics.meanStrain <= strainTol &&
-      flat.metrics.creaseResidual <= creaseTol,
+      flat.metrics.creaseResidual <= creaseTol &&
+      pathStrain <= 2 * strainTol,
     worstSourceVertex,
   };
 }

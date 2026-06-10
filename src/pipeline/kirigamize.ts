@@ -24,7 +24,7 @@ import { buildTopology } from "./mesh.js";
 import { planCuts } from "./plan-cuts.js";
 import { placeSheet } from "./route-seams.js";
 import { seamedUnfold } from "./unfold.js";
-import { DEFAULT_VERIFY, verifyFold } from "./verify.js";
+import { DEFAULT_VERIFY, verifyFold, type VentHole } from "./verify.js";
 import type { FoldFile } from "../model/fold-file.js";
 import {
   PipelineError,
@@ -118,17 +118,37 @@ export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> =
     return { plan, unfold, sheet, fkld };
   };
 
+  // Declared vent holes for the vent-aware d_H (open kirigami: coverage
+  // holes at declared vents are not coverage errors). Center = the vent's
+  // source vertex on Q; radius = max goal-space distance from that vertex to
+  // its ventEdges' endpoints (the removed slivers are sub-triangles with
+  // apex at the center and far vertices at those endpoints, so this ball
+  // conservatively contains the whole hole).
+  const ventHoles = (unfold: UnfoldResult): VentHole[] =>
+    unfold.vents.map((vt) => {
+      const center = mesh.vertices[vt.sourceVertex];
+      let radiusMm = 0;
+      for (const [a, b] of vt.ventEdges) {
+        for (const v of [a, b]) {
+          const g = unfold.goalPos[v];
+          radiusMm = Math.max(radiusMm, Math.hypot(g.x - center.x, g.y - center.y, g.z - center.z));
+        }
+      }
+      return { center, radiusMm };
+    });
+
   let stages = runPipeline([]);
   if (!opts.verify) {
     return { ...stages, conditioning: reports, defects, report: null };
   }
 
   // Stage 5: fold-from-flat verification with the bounded optimize schedule
-  // (K4): (1) free fold; (2) free fold at 3× iterations; (3) re-plan with the
-  // worst-fitting vertex as an extra terminal and free-fold again.
+  // (K4): (1) two-phase fold; (2) same at 3× iterations; (3) re-plan with the
+  // worst-fitting vertex as an extra terminal and fold again.
   let report = verifyFold(stages.fkld, mesh, {
     epsilonRel: opts.epsilonRel,
     iterations: opts.iterations,
+    vents: ventHoles(stages.unfold),
   });
   let attempts = 1;
 
@@ -137,6 +157,7 @@ export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> =
     const longReport = verifyFold(stages.fkld, mesh, {
       epsilonRel: opts.epsilonRel,
       iterations: 3 * opts.iterations,
+      vents: ventHoles(stages.unfold),
     });
     attempts = 2;
     if (longReport.foldFromFlat.dH <= report.foldFromFlat.dH) report = longReport;
@@ -148,6 +169,7 @@ export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> =
     const retriedReport = verifyFold(retried.fkld, mesh, {
       epsilonRel: opts.epsilonRel,
       iterations: opts.iterations,
+      vents: ventHoles(retried.unfold),
     });
     attempts = 3;
     if (retriedReport.foldFromFlat.dH <= report.foldFromFlat.dH) {

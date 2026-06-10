@@ -5,20 +5,20 @@ import { angleDefects } from "../../../src/pipeline/curvature.js";
 import { DRIVEN_KEY, emitFkld } from "../../../src/pipeline/emit.js";
 import { buildTopology } from "../../../src/pipeline/mesh.js";
 import { planCuts } from "../../../src/pipeline/plan-cuts.js";
-import { packPatches } from "../../../src/pipeline/route-seams.js";
+import { placeSheet } from "../../../src/pipeline/route-seams.js";
 import { seamedUnfold } from "../../../src/pipeline/unfold.js";
 import { isFkld, type FoldFile } from "../../../src/model/fold-file.js";
 import { isFoldable } from "../../../src/sim/fold-adapter.js";
 import { buildScene, canSimulate } from "../../../src/sim/scene.js";
 import type { TriMesh } from "../../../src/pipeline/types.js";
-import { makeCube, makeOctahedron } from "./fixtures/targets.js";
+import { makeCube, makeOctahedron, makeSaddleFan } from "./fixtures/targets.js";
 
 function emitFor(mesh: TriMesh, strategy: "dart" | "tuck-all" = "dart", tuckSet: number[] = []) {
   const topo = buildTopology(mesh);
   const defects = angleDefects(mesh, topo);
   const plan = planCuts(mesh, topo, defects, { lambda: 0, strategy });
-  const unfold = seamedUnfold(mesh, topo, plan);
-  const sheet = packPatches(unfold, { mesh, topo, defects });
+  const unfold = seamedUnfold(mesh, topo, plan, defects);
+  const sheet = placeSheet(unfold, { mesh, topo, defects });
   const fkld = emitFkld(sheet, {
     defects,
     target: mesh,
@@ -69,6 +69,12 @@ describe("emitFkld — cube", () => {
     expect(buildScene(fkld)).not.toBeNull();
   });
 
+  it("fkld:meta_architecture carries the placeSheet paper rectangle", () => {
+    const meta = fkld[KEYS.meta.architecture] as { sheet: Record<string, number> };
+    expect(meta.sheet).toEqual(sheet.sheetRect);
+    expect(meta.sheet.marginMm).toBe(5);
+  });
+
   it("carries the guided-fold contract: foldedForm goal frame + driven boundary", () => {
     const frames = fkld.file_frames as { frame_classes: string[]; vertices_coords: number[][] }[];
     expect(frames.length).toBe(1);
@@ -76,7 +82,13 @@ describe("emitFkld — cube", () => {
     const goal = frames[0].vertices_coords;
     expect(goal.length).toBe((fkld.vertices_coords as unknown[]).length);
     for (const g of goal) expect(g.length).toBe(3);
-    // goal positions are exactly Q vertices (±50 mm cube corners)
+    // the goal frame is exactly the sheet's goalPos (folded-target positions)
+    goal.forEach((g, i) => {
+      expect(g[0]).toBeCloseTo(sheet.goalPos[i].x, 12);
+      expect(g[1]).toBeCloseTo(sheet.goalPos[i].y, 12);
+      expect(g[2]).toBeCloseTo(sheet.goalPos[i].z, 12);
+    });
+    // ... which for the (vent-free) cube are exactly Q vertices (±50 mm corners)
     for (const g of goal) for (const c of g) expect(Math.abs(c)).toBeCloseTo(50, 9);
 
     const driven = fkld[DRIVEN_KEY] as number[];
@@ -97,13 +109,46 @@ describe("emitFkld — cube", () => {
     const defect = fkld[KEYS.vertices.angleDefect] as number[];
     const seen = new Map<number, number>(); // source vertex → defect
     (fkld[KEYS.vertices.curvatureClass] as string[]).forEach((_, i) => {
-      seen.set(sheetSource(i), defect[i]);
+      if (sheetSource(i) >= 0) seen.set(sheetSource(i), defect[i]); // skip synthesized −1
     });
     const sum = [...seen.values()].reduce((a, b) => a + b, 0);
     expect(sum).toBeCloseTo(4 * Math.PI, 9);
   });
 
   const sheetSource = (i: number): number => sheet.origVertex[i];
+});
+
+describe("emitFkld — saddle fan (vents and synthesized vertices)", () => {
+  const { sheet, fkld } = emitFor(makeSaddleFan());
+
+  it("origVertex −1 vertices carry defect 0 / class 'boundary'; vent edges emitted as C/vent", () => {
+    const defect = fkld[KEYS.vertices.angleDefect] as number[];
+    const cls = fkld[KEYS.vertices.curvatureClass] as string[];
+    const synthesized = sheet.origVertex
+      .map((src, i) => ({ src, i }))
+      .filter((x) => x.src === -1)
+      .map((x) => x.i);
+    expect(synthesized.length).toBeGreaterThanOrEqual(1); // the vent split point
+    for (const i of synthesized) {
+      expect(defect[i]).toBe(0);
+      expect(cls[i]).toBe("boundary");
+    }
+    const cutTypes = fkld[KEYS.edges.cutType] as (string | null)[];
+    expect(cutTypes.filter((c) => c === "vent").length).toBeGreaterThanOrEqual(1);
+    expect(isFkld(fkld)).toBe(true);
+  });
+
+  it("driven flags follow the sheet-boundary rule (B or C edge endpoints)", () => {
+    const driven = fkld[DRIVEN_KEY] as number[];
+    const expected = new Set<number>();
+    sheet.edges.forEach((e, i) => {
+      if (sheet.assignment[i] === "C" || sheet.assignment[i] === "B") {
+        expected.add(e.a);
+        expected.add(e.b);
+      }
+    });
+    driven.forEach((d, v) => expect(d).toBe(expected.has(v) ? 1 : 0));
+  });
 });
 
 describe("emitFkld — tuck annotation (octahedron)", () => {

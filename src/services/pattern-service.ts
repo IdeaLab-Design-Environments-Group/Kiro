@@ -34,14 +34,19 @@ export function kirigamizeMesh(text: string, ext: "obj" | "stl", sourceName: str
   const name = sourceName.replace(/\.(obj|stl)$/i, "") + ".fkld";
   const r = result.report;
   const cuts = result.plan.cutEdges.length + result.unfold.reliefEdges.length;
+  const vents = result.unfold.vents.length;
   const verdict = r
-    ? `${r.converged ? "verified" : "NOT verified"}: d_H = ${r.dH.toFixed(2)} mm (ε = ${r.epsilon.toFixed(2)} mm), ` +
-      `mean strain ${(100 * r.meanStrain).toFixed(1)}%, ${r.attempts} attempt(s)`
+    ? `${r.converged ? "folds from flat" : "does NOT fold from flat"}: ` +
+      `d_H = ${r.foldFromFlat.dH.toFixed(2)} mm (ε = ${r.epsilon.toFixed(2)} mm), ` +
+      `strain ${(100 * r.foldFromFlat.meanStrain).toFixed(1)}% · ` +
+      `equilibrium d_H = ${r.equilibrium.dH.toFixed(2)} mm, ${r.attempts} attempt(s)`
     : "unverified";
   return {
     fkld: result.fkld,
     name,
-    summary: `Kirigamized "${sourceName}" → ${cuts} cuts, ${result.sheet.faces.length} faces — ${verdict}.`,
+    summary:
+      `Kirigamized "${sourceName}" → ${cuts} cuts${vents ? `, ${vents} vent(s)` : ""}, ` +
+      `${result.sheet.faces.length} faces — ${verdict}.`,
     ok: !(r && !r.converged),
   };
 }

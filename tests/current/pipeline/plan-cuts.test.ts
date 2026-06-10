@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { angleDefects } from "../../../src/pipeline/curvature.js";
-import { buildTopology, vertexWedges } from "../../../src/pipeline/mesh.js";
+import { buildTopology } from "../../../src/pipeline/mesh.js";
 import { planCuts, shortestPaths } from "../../../src/pipeline/plan-cuts.js";
-import type { MeshTopology, TriMesh } from "../../../src/pipeline/types.js";
+import type { MeshTopology } from "../../../src/pipeline/types.js";
 import { makeCube, makeGrid, makeOctahedron, makePyramid, makeSaddleFan } from "./fixtures/targets.js";
-
-const TAU = 2 * Math.PI;
 
 function isForest(topo: MeshTopology, cutEdges: number[]): boolean {
   // union-find over the cut edges; a cycle-closing edge makes it not-a-forest
@@ -41,6 +39,18 @@ describe("shortestPaths", () => {
     expect(res.dist[0]).toBe(0);
     expect(res.dist[2]).toBeCloseTo(20, 9); // two cells along an axis
   });
+
+  it("noTransit vertices are reachable as endpoints but never passed through", () => {
+    const grid = makeGrid(2, 2, 10);
+    const topo = buildTopology(grid);
+    // forbid transit through every vertex except the source's row: any path
+    // to vertex 2 (two cells along x) must then go straight along the row.
+    const noTransit = new Set([...grid.vertices.keys()].filter((v) => v !== 0 && v !== 1 && v !== 2));
+    const res = shortestPaths(grid, topo, [0], undefined, noTransit);
+    expect(res.dist[1]).toBeCloseTo(10, 9); // endpoint: still reachable
+    expect(res.dist[2]).toBeCloseTo(20, 9); // routed along the allowed row
+    expect(res.prevVertex[2]).toBe(1); // ... not through a forbidden vertex
+  });
 });
 
 describe("planCuts — dart strategy (default)", () => {
@@ -59,19 +69,18 @@ describe("planCuts — dart strategy (default)", () => {
     expect(plan.cost.length).toBeCloseTo(7 * 100, 6); // corner-adjacent paths are single 100mm edges
   });
 
-  it("saddle fan: exactly the Gauss–Bonnet-forced cuts — cut-degree ≥ 2, all wedges < 2π", () => {
+  it("saddle fan: a single slit reaches the δ<0 center — vents handle closure (no wedge rule)", () => {
     const saddle = makeSaddleFan();
     const topo = buildTopology(saddle);
     const defects = angleDefects(saddle, topo);
     const plan = planCuts(saddle, topo, defects, { lambda: 0, strategy: "dart" });
     expect(plan.perVertexAction[0]).toBe("slit");
-    expect(cutDegree(topo, plan.cutEdges, 0)).toBeGreaterThanOrEqual(2);
-    const cutSet = new Set(plan.cutEdges);
-    const wedges = vertexWedges(saddle, topo, 0, (e) => cutSet.has(e));
-    expect(wedges.length).toBeGreaterThanOrEqual(2);
-    for (const w of wedges) expect(w.angle).toBeLessThan(TAU);
-    // and nothing else is cut beyond what the center vertex forces
-    expect(plan.cutEdges.length).toBe(2);
+    // necessity: a slit must REACH the center (cut-degree ≥ 1) — the old
+    // fan-splitting cut-degree ≥ 2 wedge rule is retired (K1 vents close 2π)
+    expect(cutDegree(topo, plan.cutEdges, 0)).toBeGreaterThanOrEqual(1);
+    expect(isForest(topo, plan.cutEdges)).toBe(true);
+    // and nothing beyond the shortest center→boundary slit is cut
+    expect(plan.cutEdges.length).toBe(1);
   });
 
   it("open pyramid: apex darted via a single slit to the boundary", () => {
@@ -114,13 +123,14 @@ describe("planCuts — tuck-all strategy (Origamizer reduction)", () => {
     for (let v = 0; v < 6; v++) expect(plan.perVertexAction[v]).toBe("tuck");
   });
 
-  it("saddle still forces cuts under tuck-all (tucks cannot add angle)", () => {
+  it("saddle still forces a cut under tuck-all (tucks cannot add angle)", () => {
     const saddle = makeSaddleFan();
     const topo = buildTopology(saddle);
     const defects = angleDefects(saddle, topo);
     const plan = planCuts(saddle, topo, defects, { lambda: 0, strategy: "tuck-all" });
     expect(plan.perVertexAction[0]).toBe("slit");
-    expect(plan.cutEdges.length).toBeGreaterThanOrEqual(2);
+    expect(plan.cutEdges.length).toBeGreaterThanOrEqual(1); // a slit reaching the center
+    expect(cutDegree(topo, plan.cutEdges, 0)).toBeGreaterThanOrEqual(1);
   });
 });
 

@@ -29,6 +29,22 @@ function planFor(mesh: TriMesh, strategy: "dart" | "tuck-all" = "dart") {
   return { topo, defects, plan: planCuts(mesh, topo, defects, { lambda: 0, strategy }) };
 }
 
+/** Σ of flat corner angles over the given flat-vertex ids (rad). */
+function flatAngleAt(flat: Vec2[], faces: [number, number, number][], at: Set<number>): number {
+  let sum = 0;
+  for (const f of faces) {
+    for (let c = 0; c < 3; c++) {
+      if (!at.has(f[c])) continue;
+      const o1 = f[(c + 1) % 3];
+      const o2 = f[(c + 2) % 3];
+      const u = { x: flat[o1].x - flat[f[c]].x, y: flat[o1].y - flat[f[c]].y };
+      const w = { x: flat[o2].x - flat[f[c]].x, y: flat[o2].y - flat[f[c]].y };
+      sum += Math.atan2(Math.abs(u.x * w.y - u.y * w.x), u.x * w.x + u.y * w.y);
+    }
+  }
+  return sum;
+}
+
 describe("trianglesOverlap (pure predicate)", () => {
   const T = (a: [number, number], b: [number, number], c: [number, number]): Vec2[] => [
     { x: a[0], y: a[1] },
@@ -63,12 +79,26 @@ describe("cutAlongEdges", () => {
     }
   });
 
+  it("4th-arg default: no vents, and goalPos = vertex positions for non-vent cuts", () => {
+    const cube = makeCube();
+    const { topo, plan } = planFor(cube);
+    const cut = cutAlongEdges(cube, topo, plan.cutEdges);
+    expect(cut.vents).toEqual([]);
+    expect(cut.goalPos.length).toBe(cut.mesh.vertices.length);
+    for (let v = 0; v < cut.mesh.vertices.length; v++) {
+      // the folded target of a plain vertex copy is the copy's Q position
+      expect(cut.goalPos[v]).toEqual(cut.mesh.vertices[v]);
+      expect(cut.goalPos[v]).toEqual(cube.vertices[cut.origVertex[v]]);
+    }
+  });
+
   it("ignores boundary edges handed in as cuts", () => {
     const pyr = makePyramid(4);
     const topo = buildTopology(pyr);
     const boundaryEdge = topo.edges.findIndex((e) => e.faces.length === 1);
     const cut = cutAlongEdges(pyr, topo, [boundaryEdge]);
     expect(cut.lips.length).toBe(0);
+    expect(cut.vents.length).toBe(0);
     expect(cut.mesh.vertices.length).toBe(pyr.vertices.length);
   });
 });
@@ -100,26 +130,26 @@ describe("unfoldPatch — isometric layout", () => {
       .filter((x) => x.src === 0)
       .map((x) => x.v);
     expect(apexCopies.length).toBe(1);
-    let sum = 0;
-    for (let f = 0; f < cut.mesh.faces.length; f++) {
-      const corner = cut.mesh.faces[f].indexOf(apexCopies[0]);
-      if (corner === -1) continue;
-      const [i, j, k] = cut.mesh.faces[f];
-      const at = [i, j, k][corner];
-      const others = [i, j, k].filter((v) => v !== at);
-      const u = { x: flat[others[0]].x - flat[at].x, y: flat[others[0]].y - flat[at].y };
-      const w = { x: flat[others[1]].x - flat[at].x, y: flat[others[1]].y - flat[at].y };
-      sum += Math.atan2(Math.abs(u.x * w.y - u.y * w.x), u.x * w.x + u.y * w.y);
-    }
+    const sum = flatAngleAt(flat, cut.mesh.faces, new Set(apexCopies));
     expect(sum).toBeCloseTo(TAU - defects.defects[0], 9);
   });
 
-  it("saddle fan: each wedge patch embeds; lips keep equal lengths", () => {
+  it("saddle fan: vent closes the flat material at the center to exactly 2π", () => {
     const saddle = makeSaddleFan();
-    const { topo, plan } = planFor(saddle);
-    const result = seamedUnfold(saddle, topo, plan);
-    // lips have equal flat lengths (same source edge, isometric layout)
+    const { topo, defects, plan } = planFor(saddle);
+    const result = seamedUnfold(saddle, topo, plan, defects);
+    // Proper-kirigami invariant: the δ<0 slit vertex keeps exactly 2π of flat
+    // material once the vent sliver is removed.
+    const centerCopies = new Set(
+      result.origVertex.map((src, v) => ({ src, v })).filter((x) => x.src === 0).map((x) => x.v),
+    );
+    expect(centerCopies.size).toBeGreaterThanOrEqual(1);
+    expect(Math.abs(flatAngleAt(result.flat, result.faces, centerCopies) - TAU)).toBeLessThan(1e-6);
+    // surviving slit lips are zero-width in flat (coincident endpoints) and
+    // keep equal flat lengths (one lip pair may have been consumed by the vent)
     for (const lip of result.lips) {
+      expect(d2(result.flat, lip.lipA[0], lip.lipB[0])).toBeLessThan(1e-9);
+      expect(d2(result.flat, lip.lipA[1], lip.lipB[1])).toBeLessThan(1e-9);
       expect(d2(result.flat, lip.lipA[0], lip.lipA[1])).toBeCloseTo(
         d2(result.flat, lip.lipB[0], lip.lipB[1]),
         9,
@@ -136,42 +166,37 @@ describe("unfoldPatch — isometric layout", () => {
   });
 });
 
-/** Per-patch overlap check on a (possibly multi-patch) unfold result. */
-function expectNoPatchOverlap(result: ReturnType<typeof seamedUnfold>): void {
-  for (let p = 0; p < result.patchCount; p++) {
-    const subset = result.faces.filter((_, f) => result.patchOfFace[f] === p);
-    expect(findSelfOverlap(result.flat, subset)).toBeNull();
-  }
-}
-
 describe("seamedUnfold (relief loop)", () => {
   it("cube: single patch, no relief needed, totalCutLength = plan length", () => {
     const cube = makeCube();
-    const { topo, plan } = planFor(cube);
-    const result = seamedUnfold(cube, topo, plan);
+    const { topo, defects, plan } = planFor(cube);
+    const result = seamedUnfold(cube, topo, plan, defects);
     expect(result.patchCount).toBe(1);
     expect(result.reliefEdges.length).toBe(0);
     expect(result.totalCutLength).toBeCloseTo(plan.cost.length, 9);
-    expectNoPatchOverlap(result);
+    expect(findSelfOverlap(result.flat, result.faces)).toBeNull();
   });
 
-  it("icosphere(1): terminates, overlap-free, relief bounded; cut length only grows", () => {
+  it("icosphere(1): one sheet, terminates, overlap-free, relief bounded; cut length only grows", () => {
     const sphere = makeIcosphere(1);
-    const { topo, plan } = planFor(sphere);
-    const result = seamedUnfold(sphere, topo, plan);
-    expectNoPatchOverlap(result);
+    const { topo, defects, plan } = planFor(sphere);
+    const result = seamedUnfold(sphere, topo, plan, defects);
+    expect(result.patchCount).toBe(1);
+    expect(findSelfOverlap(result.flat, result.faces)).toBeNull();
     expect(result.reliefEdges.length).toBeLessThanOrEqual(RELIEF_MAX);
     expect(result.totalCutLength).toBeGreaterThanOrEqual(plan.cost.length - 1e-9);
   });
 
-  it("saddle fan: splits into 2 patches (fan articulates only through the slit vertex)", () => {
+  it("saddle fan: ONE sheet with a single vent of angle |δ(center)|", () => {
     const saddle = makeSaddleFan();
-    const { topo, plan } = planFor(saddle);
-    const result = seamedUnfold(saddle, topo, plan);
-    expect(result.patchCount).toBe(2);
+    const { topo, defects, plan } = planFor(saddle);
+    const result = seamedUnfold(saddle, topo, plan, defects);
+    expect(result.patchCount).toBe(1);
+    expect(findSelfOverlap(result.flat, result.faces)).toBeNull();
+    expect(result.goalPos.length).toBe(result.flat.length);
+    expect(result.vents.length).toBe(1);
+    expect(result.vents[0].sourceVertex).toBe(0);
+    expect(Math.abs(result.vents[0].angle - Math.abs(defects.defects[0]))).toBeLessThan(1e-6);
     expect(result.totalCutLength).toBeGreaterThanOrEqual(plan.cost.length - 1e-9);
-    expectNoPatchOverlap(result);
-    // every Q vertex is still represented
-    expect(new Set(result.origVertex).size).toBe(saddle.vertices.length);
   });
 });

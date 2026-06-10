@@ -163,7 +163,13 @@ export interface Sheet {
 
 /** Metrics of one settled fold (K4, `verify.ts`). */
 export interface FoldMetrics {
-  /** Sampled symmetric Hausdorff distance to Q after rigid alignment, mm. */
+  /**
+   * Sampled symmetric Hausdorff distance to Q after rigid alignment, mm.
+   * Vent-aware (open kirigami): Q→folded samples inside a declared vent hole
+   * are excluded — the folded surface legitimately has a small hole there, so
+   * missing coverage at a vent is not a coverage error. The folded→Q
+   * direction stays full strength (the sheet must lie ON Q everywhere).
+   */
   dH: number;
   /** dH / bbox diagonal of Q. */
   dHRel: number;
@@ -174,17 +180,40 @@ export interface FoldMetrics {
   iterations: number;
   /** solveUntilSettled converged (finite, KE below threshold). */
   settled: boolean;
+  /**
+   * Fold-from-flat only (phase A, kinematic transport): max over fp =
+   * 0.25/0.5/0.75 of the mean TENSILE bar strain max(l/l₀ − 1, 0) while every
+   * vertex is driven linearly rest→goal. Tensile, not unsigned: by the
+   * triangle inequality |(1−fp)·d₀ + fp·d₁| ≤ l₀ whenever |d₀| = |d₁| = l₀,
+   * so a consistent (isometric) pattern can NEVER lengthen a bar along the
+   * linear path — pathStrain ≈ 0 iff the pattern is consistent — while the
+   * unsigned mid-path strain carries an irreducible chord-shortening artifact
+   * (≈ 1 − cos(φ/2) for face rotation φ; ~31% mean on a perfect cube).
+   * Absent on equilibrium metrics (no transport phase).
+   */
+  pathStrain?: number;
 }
 
 /**
  * Result of the simulator verification (K4, `verify.ts`).
  *
- * `foldFromFlat` is the PRIMARY gate — the pattern is folded up from the
- * flat rest pose by its crease targets alone (free fold, no driven
- * boundary), Kabsch-aligned to Q, and measured. That is the honest
- * "actually folds from a sheet of paper" test. `equilibrium` (start at the
- * goal pose, relax, measure drift) is kept as a secondary reported metric —
- * never sufficient alone.
+ * `foldFromFlat` is the PRIMARY gate, run in two phases:
+ *   A. kinematic transport — EVERY vertex is driven linearly rest→goal as
+ *      foldPercent eases 0→1, demonstrating a continuous motion from the
+ *      flat sheet; the mean tensile bar strain sampled at fp = 0.25/0.5/0.75
+ *      is recorded as `pathStrain` (≈ 0 iff the pattern is isometrically
+ *      consistent — see FoldMetrics.pathStrain);
+ *   B. release-and-settle — at fp = 1 the original driven flags are
+ *      restored (only sheet-boundary vertices stay pinned), velocities are
+ *      zeroed, and the solver relaxes until settled: the folded state must
+ *      HOLD under the pattern's own bars/creases. Metrics are measured after
+ *      phase B.
+ * This makes free interior fold-line vertices (e.g. a tent ridge) verifiable
+ * — the driven forward process alone cannot raise them (mirror-side crease
+ * reactions) — while staying honest: a wrong pattern spikes pathStrain in
+ * phase A or drifts away in phase B. `equilibrium` (start at the goal pose,
+ * relax, measure drift) is kept as a secondary reported metric — never
+ * sufficient alone.
  */
 export interface VerifyReport {
   foldFromFlat: FoldMetrics;
@@ -194,7 +223,10 @@ export interface VerifyReport {
   /** Number of non-driven sheet vertices in the equilibrium (guided) mode. */
   freeVertices: number;
   attempts: number;
-  /** foldFromFlat.dH ≤ ε AND its strain/crease residuals within tolerance. */
+  /**
+   * foldFromFlat settled AND its dH ≤ ε AND strain/crease residuals within
+   * tolerance AND pathStrain ≤ 2× strainTol.
+   */
   converged: boolean;
   /** Q vertex nearest the worst fold-from-flat sample — the refine terminal. */
   worstSourceVertex: number;

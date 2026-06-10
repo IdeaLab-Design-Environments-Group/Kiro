@@ -104,9 +104,6 @@ export function cutAlongEdges(
   const faces: ([number, number, number] | null)[] = mesh.faces.map(
     (fv, f) => fv.map((v) => cornerCopy.get(`${f}_${v}`)!) as [number, number, number],
   );
-  /** Extra faces appended by vent splits (neighbor splitting). */
-  const extraFaces: [number, number, number][] = [];
-
   const lips: LipPair[] = [];
   for (const e of cutSet) {
     const { a, b, faces: ef } = topo.edges[e];
@@ -118,118 +115,226 @@ export function cutAlongEdges(
     });
   }
 
-  // --- Vents (K1): remove a sliver of angle |δ| at each δ<0 slit vertex ----
+  // --- Vents (K1): remove a sliver of total angle |δ| at each δ<0 slit -----
+  // vertex, working on LIVE geometry (earlier vents may have consumed or
+  // split faces another vent's fan touches — source-mesh angles go stale).
+  // The removal target is DYNAMIC: whatever live angle exceeds 2π at the
+  // vertex right now. Candidates (each wedge copy × walk direction) are
+  // tried with rollback until one fits AND keeps the sheet connected.
   const vents: VentRecord[] = [];
-  for (const [v, angle] of ventAngles) {
-    const recorded = wedgesOf.get(v) ?? [];
-    // The slit must REACH v (cut-degree ≥ 1) so the wedge walk has a leading
-    // lip to start the sliver from; a closed untouched ring has no lip.
+  const liveAngleAt = (vc: number): number => {
+    let sum = 0;
+    for (const tri of faces) {
+      if (tri === null || !tri.includes(vc)) continue;
+      const [i, j, k] = tri;
+      const at = vc;
+      const others = (i === vc ? [j, k] : j === vc ? [k, i] : [i, j]) as [number, number];
+      const u = {
+        x: vertices[others[0]].x - vertices[at].x,
+        y: vertices[others[0]].y - vertices[at].y,
+        z: vertices[others[0]].z - vertices[at].z,
+      };
+      const w = {
+        x: vertices[others[1]].x - vertices[at].x,
+        y: vertices[others[1]].y - vertices[at].y,
+        z: vertices[others[1]].z - vertices[at].z,
+      };
+      const cr = {
+        x: u.y * w.z - u.z * w.y,
+        y: u.z * w.x - u.x * w.z,
+        z: u.x * w.y - u.y * w.x,
+      };
+      sum += Math.atan2(Math.hypot(cr.x, cr.y, cr.z), u.x * w.x + u.y * w.y + u.z * w.z);
+    }
+    return sum;
+  };
+  /** Ordered live fan chain of work-face indices around copy vc (open chain). */
+  const liveChain = (vc: number): number[] => {
+    const incident: number[] = [];
+    for (let f = 0; f < faces.length; f++) if (faces[f] !== null && faces[f]!.includes(vc)) incident.push(f);
+    if (incident.length === 0) return [];
+    // adjacency through shared (vc, x) edges
+    const byNeighbor = new Map<number, number[]>(); // x → faces
+    for (const f of incident) {
+      for (const x of faces[f]!) {
+        if (x === vc) continue;
+        const list = byNeighbor.get(x) ?? [];
+        list.push(f);
+        byNeighbor.set(x, list);
+      }
+    }
+    // chain ends: faces with an un-shared neighbor edge
+    const isEnd = (f: number): boolean =>
+      faces[f]!.filter((x) => x !== vc).some((x) => (byNeighbor.get(x) ?? []).length === 1);
+    const start = incident.find(isEnd) ?? incident[0];
+    const chain = [start];
+    const seen = new Set([start]);
+    for (;;) {
+      const cur = chain[chain.length - 1];
+      const next = faces[cur]!
+        .filter((x) => x !== vc)
+        .flatMap((x) => byNeighbor.get(x) ?? [])
+        .find((f) => !seen.has(f));
+      if (next === undefined) break;
+      chain.push(next);
+      seen.add(next);
+    }
+    return chain;
+  };
+  /** Live corner angle of work face f at copy vc. */
+  const liveCorner = (f: number, vc: number): number => {
+    const tri = faces[f]!;
+    const others = tri.filter((x) => x !== vc) as [number, number];
+    const u = {
+      x: vertices[others[0]].x - vertices[vc].x,
+      y: vertices[others[0]].y - vertices[vc].y,
+      z: vertices[others[0]].z - vertices[vc].z,
+    };
+    const w = {
+      x: vertices[others[1]].x - vertices[vc].x,
+      y: vertices[others[1]].y - vertices[vc].y,
+      z: vertices[others[1]].z - vertices[vc].z,
+    };
+    const cr = { x: u.y * w.z - u.z * w.y, y: u.z * w.x - u.x * w.z, z: u.x * w.y - u.y * w.x };
+    return Math.atan2(Math.hypot(cr.x, cr.y, cr.z), u.x * w.x + u.y * w.y + u.z * w.z);
+  };
+  /** Single-component check over current live faces. */
+  const liveConnected = (): boolean => {
+    const live = faces.filter((f): f is [number, number, number] => f !== null);
+    if (live.length === 0) return true;
+    return labelComponents({ vertices, faces: live }).count === 1;
+  };
+
+  const ventVerts = [...ventAngles.keys()].sort((a, b) => a - b);
+  console.error(`[dbg] cutAlongEdges cutSet=[${[...cutSet]}] pre-vent connected=${liveConnected()}`);
+  for (const v of ventVerts) {
     if (!topo.vertexEdges[v].some((e) => cutSet.has(e))) {
       throw new PipelineError("unfold", `vent vertex ${v} has no incident slit (cut-degree 0)`, { vertex: v });
     }
-    const wedge = recorded.reduce((a, b) => (b.angle > a.angle ? b : a));
-    if (angle >= wedge.angle - ANG_EPS) {
+    const copies = (wedgesOf.get(v) ?? []).map((w) => w.copy);
+    // Dynamic target: live excess over the flat sheet's 2π (earlier vents
+    // may already have consumed part of this vertex's material).
+    const TAU = 2 * Math.PI;
+    const excess = copies.reduce((acc, c) => acc + liveAngleAt(c), 0) - TAU;
+    if (excess <= 1e-7) continue; // already flat-compatible
+
+    // Candidates: every copy's live chain, walked from either end, ordered
+    // by descending live wedge angle (most room first).
+    const candidates: { vc: number; chain: number[] }[] = [];
+    for (const vc of copies.sort((a, b) => liveAngleAt(b) - liveAngleAt(a))) {
+      const chain = liveChain(vc);
+      if (chain.length === 0) continue;
+      candidates.push({ vc, chain });
+      candidates.push({ vc, chain: [...chain].reverse() });
+    }
+
+    let applied = false;
+    for (const { vc, chain } of candidates) {
+      // Snapshot for rollback.
+      const facesSnap = faces.map((f) => (f === null ? null : ([...f] as [number, number, number])));
+      const vertCount = vertices.length;
+      const ventEdges: [number, number][] = [];
+      let remaining = excess;
+      let ok = true;
+
+      for (let i = 0; i < chain.length && remaining > ANG_EPS; i++) {
+        const f = chain[i];
+        if (faces[f] === null) {
+          ok = false;
+          break;
+        }
+        const tri = faces[f]!;
+        const others = tri.filter((x) => x !== vc) as [number, number];
+        // Walk entry side: shared with the previous chain face; for i=0 the
+        // chain-end (boundary) neighbor.
+        let lead: number;
+        if (i > 0 && faces[chain[i - 1]] !== null) {
+          lead = others.find((x) => faces[chain[i - 1]]!.includes(x)) ?? others[0];
+        } else if (chain.length > 1 && faces[chain[1]] !== null) {
+          lead = others.find((x) => !faces[chain[1]]!.includes(x)) ?? others[0];
+        } else {
+          lead = Math.min(...others);
+        }
+        const trail = others.find((x) => x !== lead)!;
+        const alpha = liveCorner(f, vc);
+
+        // Find the live far neighbor across (lead, trail) before mutating.
+        const farNeighbor = faces.findIndex(
+          (g, gi) => gi !== f && g !== null && g.includes(lead) && g.includes(trail),
+        );
+
+        if (remaining >= alpha - ANG_EPS) {
+          faces[f] = null;
+          remaining -= alpha;
+          if (farNeighbor !== -1) ventEdges.push([lead, trail]);
+          continue;
+        }
+
+        // Split: m on live segment (lead, trail) at angle `remaining` from
+        // (vc, lead). Sine rule in the live triangle.
+        const beta = liveCorner(f, lead);
+        const lvl = distance(vertices[vc], vertices[lead]);
+        const llt = distance(vertices[lead], vertices[trail]);
+        const am = (lvl * Math.sin(remaining)) / Math.sin(beta + remaining);
+        const t = Math.min(1 - 1e-9, Math.max(1e-9, am / llt));
+        const pl = vertices[lead];
+        const pt = vertices[trail];
+        const m3 = { x: pl.x + t * (pt.x - pl.x), y: pl.y + t * (pt.y - pl.y), z: pl.z + t * (pt.z - pl.z) };
+        const gl = goalPos[lead];
+        const gt = goalPos[trail];
+        const mg = { x: gl.x + t * (gt.x - gl.x), y: gl.y + t * (gt.y - gl.y), z: gl.z + t * (gt.z - gl.z) };
+        const m = vertices.length;
+        vertices.push(m3);
+        goalPos.push(mg);
+        origVertex.push(-1);
+
+        faces[f] = tri.map((x) => (x === lead ? m : x)) as [number, number, number];
+        ventEdges.push([vc, m]);
+
+        if (farNeighbor !== -1) {
+          const ntri = faces[farNeighbor]!;
+          const third = ntri.find((x) => x !== lead && x !== trail)!;
+          const ia = ntri.indexOf(lead);
+          const traversesLeadToTrail = ntri[(ia + 1) % 3] === trail;
+          if (traversesLeadToTrail) {
+            faces[farNeighbor] = [lead, m, third];
+            faces.push([m, trail, third]);
+          } else {
+            faces[farNeighbor] = [trail, m, third];
+            faces.push([m, lead, third]);
+          }
+          ventEdges.push([lead, m]);
+        }
+        remaining = 0;
+      }
+
+      if (ok && remaining <= 1e-6 && liveConnected()) {
+        vents.push({ sourceVertex: v, angle: excess, ventEdges });
+        applied = true;
+        break;
+      }
+      console.error(
+        `[dbg]   vent v=${v} cand vc=${vc} chain=[${chain}] FAIL ok=${ok} remaining=${remaining} connected=${ok && remaining <= 1e-6 ? liveConnected() : "?"}`,
+      );
+      // Rollback.
+      faces.length = facesSnap.length;
+      for (let i = 0; i < facesSnap.length; i++) faces[i] = facesSnap[i];
+      vertices.length = vertCount;
+      goalPos.length = vertCount;
+      origVertex.length = vertCount;
+    }
+
+    if (!applied) {
       throw new PipelineError(
         "unfold",
-        `vent angle ${angle.toFixed(4)} ≥ largest wedge ${wedge.angle.toFixed(4)} at vertex ${v} — mesh too coarse for this defect`,
+        `no vent placement at vertex ${v} absorbs ${excess.toFixed(4)} rad while keeping the sheet connected — mesh too coarse for this defect`,
         { vertex: v },
       );
     }
-    const ventEdges: [number, number][] = [];
-    let remaining = angle;
-
-    // Walk the wedge fan from its leading side, consuming corner angle at v.
-    for (let i = 0; i < wedge.faces.length && remaining > ANG_EPS; i++) {
-      const f = wedge.faces[i];
-      const src = mesh.faces[f];
-      const alpha = faceAngles(mesh, f)[src.indexOf(v)];
-      // Leading neighbor: shared with the previous fan face (or, for i=0, the
-      // vertex completing the leading separator/lip edge — the one NOT shared
-      // with the next face; for a 1-face wedge either, deterministically).
-      const others = src.filter((x) => x !== v);
-      let lead: number;
-      if (i > 0) {
-        const prev = mesh.faces[wedge.faces[i - 1]];
-        lead = others.find((x) => prev.includes(x))!;
-      } else if (wedge.faces.length > 1) {
-        const next = mesh.faces[wedge.faces[1]];
-        lead = others.find((x) => !next.includes(x)) ?? others[0];
-      } else {
-        lead = Math.min(...others);
-      }
-      const trail = others.find((x) => x !== lead)!;
-
-      if (remaining >= alpha - ANG_EPS) {
-        // Consume the whole face: it leaves the sheet; its far edge becomes a
-        // vent boundary on the neighbor's side (or vanishes if already boundary).
-        faces[f] = null;
-        remaining -= alpha;
-        const farEdge = topo.edgeIndex.get(edgeKey(lead, trail))!;
-        const neighbor = topo.edges[farEdge].faces.find((g) => g !== f);
-        if (neighbor !== undefined && faces[neighbor] !== null) {
-          ventEdges.push([cornerCopy.get(`${neighbor}_${lead}`)!, cornerCopy.get(`${neighbor}_${trail}`)!]);
-        }
-        continue;
-      }
-
-      // Split the face: insert m on segment (lead, trail) at angle `remaining`
-      // from edge (v, lead). Sine rule in triangle (v, lead, trail):
-      //   |lead,m| = |v,lead| · sin(r) / sin(β + r),  β = angle at lead.
-      const beta = faceAngles(mesh, f)[src.indexOf(lead)];
-      const lvl = distance(mesh.vertices[v], mesh.vertices[lead]);
-      const llt = distance(mesh.vertices[lead], mesh.vertices[trail]);
-      const am = (lvl * Math.sin(remaining)) / Math.sin(beta + remaining);
-      const t = Math.min(1 - 1e-9, Math.max(1e-9, am / llt));
-      const pl = mesh.vertices[lead];
-      const pt = mesh.vertices[trail];
-      const m3 = { x: pl.x + t * (pt.x - pl.x), y: pl.y + t * (pt.y - pl.y), z: pl.z + t * (pt.z - pl.z) };
-      const m = vertices.length;
-      vertices.push(m3);
-      goalPos.push({ ...m3 });
-      origVertex.push(-1);
-
-      const vc = cornerCopy.get(`${f}_${v}`)!;
-      const lc = cornerCopy.get(`${f}_${lead}`)!;
-      void cornerCopy.get(`${f}_${trail}`); // (trail copy unchanged)
-      // Keep (v, m, trail) — the sliver (v, lead, m) leaves the sheet. Replace
-      // lead's slot with m to preserve winding.
-      faces[f] = (faces[f]!.map((x) => (x === lc ? m : x)) as [number, number, number]);
-      // The new boundary ray (v, m) is a physically-cut vent line.
-      ventEdges.push([vc, m]);
-
-      // Conformity: split the neighbor across (lead, trail) at m too.
-      const farEdge = topo.edgeIndex.get(edgeKey(lead, trail))!;
-      const neighbor = topo.edges[farEdge].faces.find((g) => g !== f);
-      if (neighbor !== undefined && faces[neighbor] !== null) {
-        const ntri = faces[neighbor]!;
-        const nl = cornerCopy.get(`${neighbor}_${lead}`)!;
-        const nt = cornerCopy.get(`${neighbor}_${trail}`)!;
-        const third = ntri.find((x) => x !== nl && x !== nt)!;
-        // Preserve winding: find the cyclic order of (nl, nt) in ntri.
-        const ia = ntri.indexOf(nl);
-        const traversesLeadToTrail = ntri[(ia + 1) % 3] === nt;
-        if (traversesLeadToTrail) {
-          faces[neighbor] = [nl, m, third];
-          extraFaces.push([m, nt, third]);
-        } else {
-          faces[neighbor] = [nt, m, third];
-          extraFaces.push([m, nl, third]);
-        }
-        // The lead-side sub-edge (lead, m) is a vent boundary on the
-        // neighbor's surviving side.
-        ventEdges.push([nl, m]);
-      }
-      remaining = 0;
-    }
-
-    if (remaining > 1e-6) {
-      throw new PipelineError("unfold", `vent at vertex ${v} could not absorb ${remaining.toFixed(6)} rad`, { vertex: v });
-    }
-    vents.push({ sourceVertex: v, angle, ventEdges });
   }
 
   // --- Assemble final arrays; drop orphaned vertices --------------------------
-  const finalFaces = [...faces.filter((f): f is [number, number, number] => f !== null), ...extraFaces];
+  const finalFaces = faces.filter((f): f is [number, number, number] => f !== null);
   const used = new Set<number>();
   for (const f of finalFaces) for (const x of f) used.add(x);
   const remap = new Map<number, number>();
@@ -522,6 +627,7 @@ export function seamedUnfold(
       );
     }
 
+    console.error(`[dbg] pass ${pass}: overlap faces ${overlap[0]},${overlap[1]}; cutSet=[${[...cutSet]}]`);
     const added = addReliefCut(mesh, topo, cut, flat, overlap, cutSet, ventAngles);
     reliefEdges.push(...added);
   }
@@ -585,10 +691,22 @@ function addReliefCut(
   const cx = (flat[tri[0]].x + flat[tri[1]].x + flat[tri[2]].x) / 3;
   const cy = (flat[tri[0]].y + flat[tri[1]].y + flat[tri[2]].y) / 3;
 
-  /** Accept a fresh edge set only if the cut sheet stays one piece. */
+  /** Accept a fresh edge set only if the cut sheet stays one piece AND every
+   * vent still finds a placement under the enlarged cut set (a trial that
+   * throws is a rejected candidate, not a pipeline failure). */
   const staysConnected = (fresh: number[]): boolean => {
-    const trial = cutAlongEdges(mesh, topo, [...cutSet, ...fresh], ventAngles);
-    return labelComponents(trial.mesh).count === 1;
+    try {
+      const trial = cutAlongEdges(mesh, topo, [...cutSet, ...fresh], ventAngles);
+      const ok = labelComponents(trial.mesh).count === 1;
+      console.error(`[dbg] relief trial fresh=[${fresh}] components-ok=${ok}`);
+      return ok;
+    } catch (err) {
+      if (err instanceof PipelineError && err.stage === "unfold") {
+        console.error(`[dbg] relief trial fresh=[${fresh}] vent-throw: ${err.message}`);
+        return false;
+      }
+      throw err;
+    }
   };
 
   // Sources: every vertex already on the cut graph or the mesh boundary.
