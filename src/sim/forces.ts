@@ -251,33 +251,14 @@ export function integrate(m: BarHingeModel, dt: number): void {
   }
 }
 
-/**
- * Stable timestep. Two explicit-Euler bounds, both with the paper's 0.9 margin:
- *  - axial mode (paper Eqs 7–8): dt < 1/(2π·ω_max), ω_max = max√(k_axial/m_min);
- *  - per-node damping mode: each beam contributes viscous c = 2ζ√(k·m_min), so a
- *    node of degree d feels Σc; v' = −(Σc/m)·v diverges unless dt < 2m/Σc. The
- *    paper's meshes keep vertex degree ≤ ~6 where the axial bound dominates, but a
- *    high-degree hub (e.g. a star apex, degree 10) makes the damping mode binding —
- *    without this bound the hub oscillates with growing amplitude and goes NaN.
- */
+/** Stable timestep dt < 1/(2π·ω_max), ω_max = max√(k_axial/m_min); paper Eqs 7–8 (0.9 margin). */
 export function computeDt(m: BarHingeModel): number {
   let maxFreq = 0;
-  const dampSum = new Float64Array(m.numNodes);
   for (let i = 0; i < m.beams.count; i++) {
-    const a = m.beams.n0[i];
-    const b = m.beams.n1[i];
-    const mMin = Math.min(m.mass[a], m.mass[b]);
+    const mMin = Math.min(m.mass[m.beams.n0[i]], m.mass[m.beams.n1[i]]);
     const w = Math.sqrt(m.beams.k[i] / mMin);
     if (w > maxFreq) maxFreq = w;
-    const c = 2 * m.params.zeta * Math.sqrt(m.beams.k[i] * mMin);
-    dampSum[a] += c;
-    dampSum[b] += c;
   }
   if (maxFreq <= 0) return 1e-3;
-  let dt = (1 / (2 * Math.PI * maxFreq)) * 0.9;
-  for (let i = 0; i < m.numNodes; i++) {
-    if (m.fixed[i] || dampSum[i] <= 0) continue; // fixed nodes never integrate
-    dt = Math.min(dt, (2 * m.mass[i]) / dampSum[i] * 0.9);
-  }
-  return dt;
+  return (1 / (2 * Math.PI * maxFreq)) * 0.9;
 }

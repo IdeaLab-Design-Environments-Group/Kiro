@@ -71,24 +71,26 @@ function foldHinge(fold: FoldFile, iters = 8000): { dz0: number; dz3: number; th
 
 describe("FOLD-spec sign convention (paper §2.3)", () => {
   it("mountain (foldAngle −90°): wings fold AWAY from the +z normal side", () => {
+    // Thresholds are scale-relative: the adapter normalizes to a ~unit sim box,
+    // so a 90° wing drop is ≈ 0.35 × span, not an absolute number of mm.
     const { dz0, dz3, theta } = foldHinge(hinge("M", -90));
-    expect(dz0).toBeLessThan(-5);
-    expect(dz3).toBeLessThan(-5);
+    expect(dz0).toBeLessThan(-0.2);
+    expect(dz3).toBeLessThan(-0.2);
     expect(Math.abs(Math.abs(theta) - Math.PI / 2)).toBeLessThan(0.15);
   });
 
   it("valley (foldAngle +90°): wings fold TOWARD the +z normal side", () => {
     const { dz0, dz3, theta } = foldHinge(hinge("V", 90));
-    expect(dz0).toBeGreaterThan(5);
-    expect(dz3).toBeGreaterThan(5);
+    expect(dz0).toBeGreaterThan(0.2);
+    expect(dz3).toBeGreaterThan(0.2);
     expect(Math.abs(Math.abs(theta) - Math.PI / 2)).toBeLessThan(0.15);
   });
 
   it("mountain and valley with the same |angle| are mirror folds", () => {
     const m = foldHinge(hinge("M", -120));
     const v = foldHinge(hinge("V", 120));
-    expect(m.dz0).toBeCloseTo(-v.dz0, 0);
-    expect(m.dz3).toBeCloseTo(-v.dz3, 0);
+    expect(m.dz0).toBeCloseTo(-v.dz0, 2);
+    expect(m.dz3).toBeCloseTo(-v.dz3, 2);
   });
 });
 
@@ -201,8 +203,8 @@ describe("end-to-end: upstream Origami-Simulator file folds per spec", () => {
     const p = model.position;
     // wings (vertices 0 and 2) rise above the diagonal crease (vertices 1, 3)
     const midZ = (p[3 * 1 + 2] + p[3 * 3 + 2]) / 2;
-    expect(p[3 * 0 + 2] - midZ).toBeGreaterThan(10);
-    expect(p[3 * 2 + 2] - midZ).toBeGreaterThan(10);
+    expect(p[3 * 0 + 2] - midZ).toBeGreaterThan(0.2); // scale-relative (unit sim box)
+    expect(p[3 * 2 + 2] - midZ).toBeGreaterThan(0.2);
     // deep valley fold approached (target −π internal)
     const c = model.creases;
     const theta = measureTheta(model, c.face1[0], c.face2[0], c.n3[0], c.n4[0]);

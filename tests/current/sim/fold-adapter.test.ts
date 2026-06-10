@@ -64,7 +64,24 @@ describe("sim/fold-adapter", () => {
 
     expect(Array.from(model.driven)).toEqual([1, 0, 0, 1]);
     expect(Array.from(model.fixed)).toEqual([1, 0, 0, 1]);
-    expect(model.goal[2]).not.toBe(0);
+    // Policy-independent contract (what pipeline/verify.ts relies on): the
+    // goal frame is mapped by ONE uniform affine transform sim = mm·s + t —
+    // whatever alignment policy the adapter currently uses. Recover (s, t)
+    // from two vertices and check every vertex agrees.
+    const mm = [
+      [0, 0, 1],
+      [1, 0, 1],
+      [1, 1, 1],
+      [0, 1, 1],
+    ];
+    const s = (model.goal[3] - model.goal[0]) / (mm[1][0] - mm[0][0]);
+    const t = [model.goal[0] - mm[0][0] * s, model.goal[1] - mm[0][1] * s, model.goal[2] - mm[0][2] * s];
+    for (let i = 0; i < 4; i++) {
+      for (let a = 0; a < 3; a++) {
+        expect(model.goal[3 * i + a]).toBeCloseTo(mm[i][a] * s + t[a], 5);
+      }
+    }
+    for (let i = 0; i < model.goal.length; i++) expect(Number.isFinite(model.goal[i])).toBe(true);
   });
 
   it("throws on non-foldable input", () => {
