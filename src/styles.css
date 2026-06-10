@@ -444,3 +444,31 @@ body {
     height: 60vh;
   }
 }
+
+/* ---- Export-SVG modal previews (cut / score / both) ---------------------- */
+.export-previews {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.export-previews figure {
+  margin: 0;
+  text-align: center;
+}
+.export-previews figcaption {
+  font-size: 12px;
+  color: #555;
+  margin-bottom: 4px;
+}
+.export-preview {
+  width: 150px;
+  height: 150px;
+  border: 1px solid #ddd;
+  background: #fff;
+}
+.export-preview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

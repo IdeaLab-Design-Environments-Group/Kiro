@@ -350,4 +350,18 @@ describe("controller/app-controller", () => {
     expect(built?.title).toContain("viewer-B.fold"); // sims what the viewer shows, not store's A
     expect(sim.enabledCalls.at(-1)).toBe(true); // 3D Sim button followed the viewer's model
   });
+
+  it("builds the SVG export from the displayed pattern, null for none / a raw mesh", () => {
+    const { store, exporter } = setup();
+    expect(exporter.provider?.()).toBeNull(); // nothing loaded
+
+    store.update({ model: { kind: "mesh", name: "x.obj", ext: "obj", text: "v 0 0 0" } });
+    expect(exporter.provider?.()).toBeNull(); // a raw mesh has no pattern to cut
+
+    store.update({ model: { kind: "fold", name: "p.fkld", object: makeFold({ edges_assignment: ["B", "B", "B"] }) } });
+    const payload = exporter.provider?.() as { files: { filename: string }[] } | null;
+    expect(payload).not.toBeNull();
+    expect(payload!.files.some((f) => f.filename.includes("cut"))).toBe(true);
+    expect(exporter.enabledCalls.at(-1)).toBe(true); // Export button enabled for a displayed pattern
+  });
 });
