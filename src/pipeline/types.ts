@@ -7,9 +7,14 @@
  * FOLD `edges_foldAngle` boundary in emit.ts).
  *
  * The one cross-milestone contract that must never break is the provenance
- * chain `origVertex`: flat/sheet vertex index → source target-mesh (Q) vertex
- * index. M3 creates it (cutting duplicates vertices), M4 carries it on the
- * Sheet, and M5 uses it to build the guided-fold goal frame from Q.
+ * pair `origVertex` + `goalPos`. `origVertex` maps flat/sheet vertex index →
+ * source target-mesh (Q) vertex index, with −1 for vertices SYNTHESIZED by
+ * K1 vents — so it answers "which Q vertex?" but not "where must this vertex
+ * land?". `goalPos` does: a folded-target position on Q for EVERY vertex
+ * (including synthesized ones), the authoritative source of the emitted
+ * guided-fold goal frame. M3/K1 creates both (cutting duplicates vertices;
+ * vents synthesize new ones), M4 carries them on the Sheet and into the
+ * FKLD's foldedForm frame, and M5 verification folds against that frame.
  */
 
 import type { Vec3 } from "../core/vec3.js";

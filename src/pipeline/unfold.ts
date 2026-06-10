@@ -198,15 +198,167 @@ export function cutAlongEdges(
     const cr = { x: u.y * w.z - u.z * w.y, y: u.z * w.x - u.x * w.z, z: u.x * w.y - u.y * w.x };
     return Math.atan2(Math.hypot(cr.x, cr.y, cr.z), u.x * w.x + u.y * w.y + u.z * w.z);
   };
-  /** Single-component check over current live faces. */
-  const liveConnected = (): boolean => {
+  /** Component count over current live faces (0 when no live faces). */
+  const liveComponents = (): number => {
     const live = faces.filter((f): f is [number, number, number] => f !== null);
-    if (live.length === 0) return true;
-    return labelComponents({ vertices, faces: live }).count === 1;
+    if (live.length === 0) return 0;
+    return labelComponents({ vertices, faces: live }).count;
   };
 
   const ventVerts = [...ventAngles.keys()].sort((a, b) => a - b);
-  console.error(`[dbg] cutAlongEdges cutSet=[${[...cutSet]}] pre-vent connected=${liveConnected()}`);
+
+  // Vents may not make connectivity WORSE than the bare cut already is. A
+  // disconnecting cut set is the CALLER's problem (seamedUnfold hard-gates
+  // it; relief trials reject it) — blaming the vent here used to surface as
+  // a bogus "mesh too coarse" failure on connectivity-unsafe relief trials.
+  const baseComponents = liveComponents();
+
+  // Development of the live sheet, used to RANK vent candidates: removing a
+  // sliver never moves surviving material (the split pieces tile flat
+  // sub-triangles of their source face), so this one layout stays valid
+  // through every excision and across vents. The best candidate is the one
+  // whose remaining material self-overlaps least — i.e. the vent is excised
+  // exactly where the isometric immersion doubles over.
+  let flatLive: Vec2[] | null = null;
+  if (ventVerts.length > 0 && baseComponents === 1) {
+    try {
+      const live = faces.filter((f): f is [number, number, number] => f !== null);
+      flatLive = unfoldPatch(
+        { mesh: { vertices, faces: live } } as CutMesh,
+        live.map((_, i) => i),
+      );
+    } catch {
+      flatLive = null; // not developable yet — fall back to first-fit placement
+    }
+  }
+
+  /** Synthesize the split vertex at parameter r along live segment (u, w). */
+  const lerpVertex = (u: number, w: number, r: number): number => {
+    const id = vertices.length;
+    const vu = vertices[u];
+    const vw = vertices[w];
+    vertices.push({ x: vu.x + r * (vw.x - vu.x), y: vu.y + r * (vw.y - vu.y), z: vu.z + r * (vw.z - vu.z) });
+    const gu = goalPos[u];
+    const gw = goalPos[w];
+    goalPos.push({ x: gu.x + r * (gw.x - gu.x), y: gu.y + r * (gw.y - gu.y), z: gu.z + r * (gw.z - gu.z) });
+    origVertex.push(-1);
+    if (flatLive !== null) {
+      const fu = flatLive[u];
+      const fw = flatLive[w];
+      flatLive.push({ x: fu.x + r * (fw.x - fu.x), y: fu.y + r * (fw.y - fu.y) });
+    }
+    return id;
+  };
+
+  /** Conformity: split the live face across (u1, u2), other than `exclude`, at mid. */
+  const splitFarAt = (u1: number, u2: number, mid: number, exclude: number): void => {
+    const far = faces.findIndex((g, gi) => gi !== exclude && g !== null && g.includes(u1) && g.includes(u2));
+    if (far === -1) return;
+    const ntri = faces[far]!;
+    const third = ntri.find((x) => x !== u1 && x !== u2)!;
+    const ia = ntri.indexOf(u1);
+    if (ntri[(ia + 1) % 3] === u2) {
+      faces[far] = [u1, mid, third];
+      faces.push([mid, u2, third]);
+    } else {
+      faces[far] = [u2, mid, third];
+      faces.push([mid, u1, third]);
+    }
+  };
+
+  /**
+   * Carve the rest of the vent cone radially outward (K1 depth): the one-ring
+   * walk only excises the sector's first ring, but the wrap it compensates
+   * displaces material at ALL radii, so the double-cover extends outward
+   * between the same two rays. Working in the live development (exact, since
+   * every split is an affine sub-division of a flat face), remove every face
+   * piece strictly between ray d1 and ray d2 from `apex`, splitting crossed
+   * faces conformingly. Stops at the sheet boundary. Connectivity damage is
+   * caught by the caller's component check.
+   */
+  const carveCone = (
+    apex: Vec2,
+    d1: Vec2,
+    d2: Vec2,
+    frontier: [number, number][],
+    ventEdges: [number, number][],
+  ): void => {
+    if (flatLive === null) return;
+    const flat = flatLive;
+    const orient = Math.sign(cross2(d1.x, d1.y, d2.x, d2.y)) || 1;
+    const sideOf = (ray: Vec2, p: Vec2): number => {
+      const c = cross2(ray.x, ray.y, p.x - apex.x, p.y - apex.y) * orient;
+      const eps = 1e-9 * (Math.hypot(ray.x, ray.y) * Math.hypot(p.x - apex.x, p.y - apex.y) + 1e-12);
+      return c > eps ? 1 : c < -eps ? -1 : 0;
+    };
+    /** Crossing of `ray` with live segment (u, t): param r on u→t, or null. */
+    const crossingOn = (ray: Vec2, u: number, t: number): number | null => {
+      const pu = flat[u];
+      const pt = flat[t];
+      const ex = pt.x - pu.x;
+      const ey = pt.y - pu.y;
+      const det = cross2(ex, ey, -ray.x, -ray.y); // [e  -d] r,s solve
+      if (Math.abs(det) < 1e-15) return null;
+      const wx = apex.x - pu.x;
+      const wy = apex.y - pu.y;
+      const r = cross2(wx, wy, -ray.x, -ray.y) / det;
+      const s = cross2(ex, ey, wx, wy) / det;
+      if (!(r > 1e-7 && r < 1 - 1e-7) || s <= 0) return null;
+      return r;
+    };
+
+    const queue = [...frontier];
+    const done = new Set<string>();
+    let guard = 0;
+    while (queue.length > 0 && guard++ < 10_000) {
+      const [x, y] = queue.pop()!;
+      const key = edgeKey(x, y);
+      if (done.has(key)) continue;
+      done.add(key);
+      const g = faces.findIndex((tri) => tri !== null && tri.includes(x) && tri.includes(y));
+      if (g === -1) continue; // sheet boundary (or already carved)
+      const t = faces[g]!.find((vv) => vv !== x && vv !== y)!;
+      const s1 = sideOf(d1, flat[t]);
+      const s2 = sideOf(d2, flat[t]);
+      if (s1 >= 0 && s2 <= 0) {
+        // Third corner on/inside the cone: the whole face goes; keep carving.
+        faces[g] = null;
+        queue.push([x, t], [t, y]);
+        continue;
+      }
+      // Exactly one ray separates t from the cone; chord it off.
+      const ray = s1 < 0 ? d1 : d2;
+      const rx = crossingOn(ray, x, t);
+      const ry = crossingOn(ray, y, t);
+      if (rx !== null && ry !== null) {
+        // Chord crosses both far edges: keep the t-corner piece only.
+        const wa = lerpVertex(x, t, rx);
+        const wb = lerpVertex(y, t, ry);
+        faces[g] = faces[g]!.map((vv) => (vv === x ? wa : vv === y ? wb : vv)) as [number, number, number];
+        ventEdges.push([wa, wb]);
+        splitFarAt(x, t, wa, g);
+        splitFarAt(y, t, wb, g);
+        queue.push([x, wa], [y, wb]);
+      } else if (ry !== null) {
+        // x sits on the chord ray: keep (x, w, t), drop (x, y, w).
+        const w = lerpVertex(y, t, ry);
+        faces[g] = faces[g]!.map((vv) => (vv === y ? w : vv)) as [number, number, number];
+        ventEdges.push([x, w]);
+        splitFarAt(y, t, w, g);
+        queue.push([y, w]);
+      } else if (rx !== null) {
+        // y sits on the chord ray: keep (w, y, t), drop (x, y, w).
+        const w = lerpVertex(x, t, rx);
+        faces[g] = faces[g]!.map((vv) => (vv === x ? w : vv)) as [number, number, number];
+        ventEdges.push([y, w]);
+        splitFarAt(x, t, w, g);
+        queue.push([x, w]);
+      }
+      // Degenerate slivers (no usable crossing) are left in place — they are
+      // thinner than the SAT shrink tolerance and harmless.
+    }
+  };
+
   for (const v of ventVerts) {
     if (!topo.vertexEdges[v].some((e) => cutSet.has(e))) {
       throw new PipelineError("unfold", `vent vertex ${v} has no incident slit (cut-degree 0)`, { vertex: v });
@@ -219,23 +371,29 @@ export function cutAlongEdges(
     if (excess <= 1e-7) continue; // already flat-compatible
 
     // Candidates: every copy's live chain, walked from either end, ordered
-    // by descending live wedge angle (most room first).
-    const candidates: { vc: number; chain: number[] }[] = [];
+    // by descending live wedge angle (most room first). `flip` disambiguates
+    // the entry side for single-face chains (whose reverse is identical).
+    const candidates: { vc: number; chain: number[]; flip: boolean }[] = [];
     for (const vc of copies.sort((a, b) => liveAngleAt(b) - liveAngleAt(a))) {
       const chain = liveChain(vc);
       if (chain.length === 0) continue;
-      candidates.push({ vc, chain });
-      candidates.push({ vc, chain: [...chain].reverse() });
+      candidates.push({ vc, chain, flip: false });
+      candidates.push({ vc, chain: [...chain].reverse(), flip: true });
     }
 
-    let applied = false;
-    for (const { vc, chain } of candidates) {
-      // Snapshot for rollback.
-      const facesSnap = faces.map((f) => (f === null ? null : ([...f] as [number, number, number])));
-      const vertCount = vertices.length;
+    /** Walk one candidate, mutating live state; returns fit + vent edges. */
+    const walkCandidate = (
+      vc: number,
+      chain: number[],
+      flip: boolean,
+      deep = true,
+    ): { fits: boolean; ventEdges: [number, number][] } => {
       const ventEdges: [number, number][] = [];
       let remaining = excess;
       let ok = true;
+      let firstLead = -1; // cone boundary ray 1 passes through this vertex
+      let coneEnd = -1; // cone boundary ray 2 passes through this vertex (m or last trail)
+      const frontier: [number, number][] = []; // far edges of the excised sector
 
       for (let i = 0; i < chain.length && remaining > ANG_EPS; i++) {
         const f = chain[i];
@@ -253,10 +411,11 @@ export function cutAlongEdges(
         } else if (chain.length > 1 && faces[chain[1]] !== null) {
           lead = others.find((x) => !faces[chain[1]]!.includes(x)) ?? others[0];
         } else {
-          lead = Math.min(...others);
+          lead = flip ? Math.max(...others) : Math.min(...others);
         }
         const trail = others.find((x) => x !== lead)!;
         const alpha = liveCorner(f, vc);
+        if (firstLead === -1) firstLead = lead;
 
         // Find the live far neighbor across (lead, trail) before mutating.
         const farNeighbor = faces.findIndex(
@@ -266,6 +425,8 @@ export function cutAlongEdges(
         if (remaining >= alpha - ANG_EPS) {
           faces[f] = null;
           remaining -= alpha;
+          coneEnd = trail;
+          frontier.push([lead, trail]);
           if (farNeighbor !== -1) ventEdges.push([lead, trail]);
           continue;
         }
@@ -287,6 +448,11 @@ export function cutAlongEdges(
         vertices.push(m3);
         goalPos.push(mg);
         origVertex.push(-1);
+        if (flatLive !== null) {
+          const fl = flatLive[lead];
+          const ft = flatLive[trail];
+          flatLive.push({ x: fl.x + t * (ft.x - fl.x), y: fl.y + t * (ft.y - fl.y) });
+        }
 
         faces[f] = tri.map((x) => (x === lead ? m : x)) as [number, number, number];
         ventEdges.push([vc, m]);
@@ -305,23 +471,77 @@ export function cutAlongEdges(
           }
           ventEdges.push([lead, m]);
         }
+        coneEnd = m;
+        frontier.push([lead, m]);
         remaining = 0;
       }
 
-      if (ok && remaining <= 1e-6 && liveConnected()) {
-        vents.push({ sourceVertex: v, angle: excess, ventEdges });
-        applied = true;
-        break;
+      // Continue the excised sector radially outward (the wrap it compensates
+      // displaces material at all radii, not just the one-ring).
+      if (deep && ok && remaining <= 1e-6 && flatLive !== null && firstLead !== -1 && coneEnd !== -1) {
+        const apex = flatLive[vc];
+        const d1 = { x: flatLive[firstLead].x - apex.x, y: flatLive[firstLead].y - apex.y };
+        const d2 = { x: flatLive[coneEnd].x - apex.x, y: flatLive[coneEnd].y - apex.y };
+        carveCone(apex, d1, d2, frontier, ventEdges);
       }
-      console.error(
-        `[dbg]   vent v=${v} cand vc=${vc} chain=[${chain}] FAIL ok=${ok} remaining=${remaining} connected=${ok && remaining <= 1e-6 ? liveConnected() : "?"}`,
-      );
-      // Rollback.
-      faces.length = facesSnap.length;
-      for (let i = 0; i < facesSnap.length; i++) faces[i] = facesSnap[i];
-      vertices.length = vertCount;
-      goalPos.length = vertCount;
-      origVertex.length = vertCount;
+
+      const fits = ok && remaining <= 1e-6 && liveComponents() === baseComponents;
+      return { fits, ventEdges };
+    };
+
+    const snapshot = () => ({
+      facesSnap: faces.map((f) => (f === null ? null : ([...f] as [number, number, number]))),
+      vertCount: vertices.length,
+    });
+    const rollback = (snap: ReturnType<typeof snapshot>) => {
+      faces.length = snap.facesSnap.length;
+      for (let i = 0; i < snap.facesSnap.length; i++) faces[i] = snap.facesSnap[i];
+      vertices.length = snap.vertCount;
+      goalPos.length = snap.vertCount;
+      origVertex.length = snap.vertCount;
+      if (flatLive !== null) flatLive.length = snap.vertCount;
+    };
+
+    // Evaluate every candidate with rollback; rank fitting ones by the flat
+    // self-overlap their excision leaves behind (fewest wins, ties keep the
+    // existing largest-wedge-first priority). Without a layout (sheet not
+    // developable / already multi-component) fall back to first fit. If no
+    // deep (radial) excision keeps the sheet connected, degrade to the
+    // shallow one-ring sliver before giving up.
+    let applied = false;
+    for (const deep of [true, false]) {
+      let bestIdx = -1;
+      let bestScore = Number.POSITIVE_INFINITY;
+      let bestVentEdges: [number, number][] = [];
+      for (let ci = 0; ci < candidates.length && !applied; ci++) {
+        const { vc, chain, flip } = candidates[ci];
+        const snap = snapshot();
+        const { fits, ventEdges } = walkCandidate(vc, chain, flip, deep);
+        if (fits && flatLive === null) {
+          vents.push({ sourceVertex: v, angle: excess, ventEdges });
+          applied = true;
+          break; // first fit — keep mutations
+        }
+        if (fits && flatLive !== null) {
+          const live = faces.filter((f): f is [number, number, number] => f !== null);
+          const score = countFlatOverlaps(flatLive, live, bestScore);
+          if (score < bestScore) {
+            bestScore = score;
+            bestIdx = ci;
+            bestVentEdges = ventEdges;
+          }
+        }
+        rollback(snap);
+      }
+      if (!applied && bestIdx !== -1) {
+        const { vc, chain, flip } = candidates[bestIdx];
+        const { fits } = walkCandidate(vc, chain, flip, deep); // deterministic re-walk
+        /* istanbul ignore if */
+        if (!fits) throw new PipelineError("unfold", `vent re-walk diverged at vertex ${v}`, { vertex: v });
+        vents.push({ sourceVertex: v, angle: excess, ventEdges: bestVentEdges });
+        applied = true;
+      }
+      if (applied) break;
     }
 
     if (!applied) {
@@ -565,6 +785,35 @@ export function findSelfOverlap(
 }
 
 /**
+ * Count of overlapping face pairs in a flat layout (same predicate family as
+ * `findSelfOverlap`; vertex-sharing pairs articulate legally and are skipped).
+ * Stops early once the count exceeds `cap` — callers compare against a best.
+ */
+function countFlatOverlaps(flat: Vec2[], faces: [number, number, number][], cap = Number.POSITIVE_INFINITY): number {
+  const tris = faces.map((f) => f.map((v) => flat[v]) as Vec2[]);
+  const boxes = tris.map((t) => ({
+    minX: Math.min(t[0].x, t[1].x, t[2].x),
+    maxX: Math.max(t[0].x, t[1].x, t[2].x),
+    minY: Math.min(t[0].y, t[1].y, t[2].y),
+    maxY: Math.max(t[0].y, t[1].y, t[2].y),
+  }));
+  let count = 0;
+  for (let i = 0; i < faces.length; i++) {
+    for (let j = i + 1; j < faces.length; j++) {
+      if (faces[i].some((v) => faces[j].includes(v))) continue;
+      const a = boxes[i];
+      const b = boxes[j];
+      if (a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY) continue;
+      if (trianglesOverlap(tris[i], tris[j])) {
+        count++;
+        if (count > cap) return count;
+      }
+    }
+  }
+  return count;
+}
+
+/**
  * Cut → vent → flatten → relief loop, under the proper-kirigami invariants:
  * the sheet must stay ONE connected piece (a disconnecting plan is a planner
  * bug, hard-gated here), and δ<0 slit vertices get vent slivers so the flat
@@ -627,7 +876,6 @@ export function seamedUnfold(
       );
     }
 
-    console.error(`[dbg] pass ${pass}: overlap faces ${overlap[0]},${overlap[1]}; cutSet=[${[...cutSet]}]`);
     const added = addReliefCut(mesh, topo, cut, flat, overlap, cutSet, ventAngles);
     reliefEdges.push(...added);
   }
@@ -697,14 +945,9 @@ function addReliefCut(
   const staysConnected = (fresh: number[]): boolean => {
     try {
       const trial = cutAlongEdges(mesh, topo, [...cutSet, ...fresh], ventAngles);
-      const ok = labelComponents(trial.mesh).count === 1;
-      console.error(`[dbg] relief trial fresh=[${fresh}] components-ok=${ok}`);
-      return ok;
+      return labelComponents(trial.mesh).count === 1;
     } catch (err) {
-      if (err instanceof PipelineError && err.stage === "unfold") {
-        console.error(`[dbg] relief trial fresh=[${fresh}] vent-throw: ${err.message}`);
-        return false;
-      }
+      if (err instanceof PipelineError && err.stage === "unfold") return false;
       throw err;
     }
   };
@@ -759,5 +1002,54 @@ function addReliefCut(
       return [e];
     }
   }
+
+  // --- Saturated cut graph: greedy ADD(+REMOVE) descent --------------------
+  // When the cut graph ∪ boundary already spans every vertex, ANY extra edge
+  // closes a cycle and severs the sheet — pure additions are exhausted (this
+  // is the normal state on all-saddle grid patches, whose MST comb makes the
+  // development wrap and tangle). A cut SWAP (add one edge, drop one) keeps
+  // the structure acyclic — the sheet stays one piece — while re-routing the
+  // slits toward radial form. Pick the move that STRICTLY reduces the flat
+  // self-overlap pair count; the strict integer descent terminates.
+  const overlapsFor = (edges: number[], cap: number): number => {
+    try {
+      const trial = cutAlongEdges(mesh, topo, edges, ventAngles);
+      if (labelComponents(trial.mesh).count !== 1) return Number.POSITIVE_INFINITY;
+      const tflat = unfoldPatch(trial, trial.mesh.faces.map((_, f) => f));
+      return countFlatOverlaps(tflat, trial.mesh.faces, cap);
+    } catch (err) {
+      if (err instanceof PipelineError) return Number.POSITIVE_INFINITY;
+      throw err;
+    }
+  };
+
+  const current = countFlatOverlaps(flat, cut.mesh.faces);
+  let best = current;
+  let bestAdd = -1;
+  let bestRemove = -1;
+  for (let add = 0; add < topo.edges.length; add++) {
+    if (cutSet.has(add) || topo.edges[add].faces.length !== 2) continue;
+    const withAdd = [...cutSet, add];
+    const nAdd = overlapsFor(withAdd, best - 1);
+    if (nAdd < best) {
+      best = nAdd;
+      bestAdd = add;
+      bestRemove = -1;
+    }
+    for (const rm of cutSet) {
+      const nSwap = overlapsFor(withAdd.filter((e) => e !== rm), best - 1);
+      if (nSwap < best) {
+        best = nSwap;
+        bestAdd = add;
+        bestRemove = rm;
+      }
+    }
+  }
+  if (bestAdd !== -1) {
+    cutSet.add(bestAdd);
+    if (bestRemove !== -1) cutSet.delete(bestRemove);
+    return [bestAdd];
+  }
+
   throw new PipelineError("unfold", "relief cut: no connectivity-safe edge near overlap", { overlap });
 }

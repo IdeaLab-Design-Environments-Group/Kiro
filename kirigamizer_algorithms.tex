@@ -110,6 +110,14 @@ action at a vertex is forced by the \emph{sign} of $\defect(v)$:
 \end{cases}
 \label{eq:rule}
 \end{equation}
+% Implementation note (src/pipeline, K1 "vents"): the discrete realization of
+% the open-slit branch removes a sliver of TARGET COVERAGE of angle |delta|
+% from a face adjacent to the slit (dynamic target = live excess over 2*pi,
+% since neighbouring vents interact), so the flat pattern carries exactly
+% 2*pi at every interior point, the slit is zero-width in the flat sheet, and
+% it opens into the deliberate hole when folded. The dart branch is the same
+% cutout taken BETWEEN faces (no coverage loss). One unified rule: cut out a
+% wedge of |delta| at every defect vertex.
 Correctness target (Origamizer's containment, cuts allowed):
 \begin{equation}
 Q\subseteq f(P)\subseteq Q\cup\Off(Q)

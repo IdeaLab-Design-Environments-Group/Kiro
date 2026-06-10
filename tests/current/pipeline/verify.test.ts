@@ -42,7 +42,7 @@ describe("sampledHausdorff", () => {
   });
 });
 
-describe("the equilibrium oracle bites (negative test)", () => {
+describe("the verification oracle bites (negative test)", () => {
   it("a non-isometric flat pattern fails verification", { timeout: 60_000 }, async () => {
     const { kirigamize } = await import("../../../src/pipeline/kirigamize.js");
     const { verifyFold } = await import("../../../src/pipeline/verify.js");
@@ -52,15 +52,61 @@ describe("the equilibrium oracle bites (negative test)", () => {
     // Corrupt the PATTERN: stretch the flat sheet 50% in x. Bar rest lengths
     // derive from the flat net, so no pose matching the goal can be
     // unstrained — the folded state is not an equilibrium of this pattern.
-    // (A tampered goal frame is healed by the solver — it relaxes back to
-    // the true shape; and the loader's uniform normalization absorbs small
-    // anisotropy into sub-tolerance mean strain, so the corruption must be
-    // decisive.)
+    // Phase B (release-and-settle) catches it via locked-in strain.
     const coords = result.fkld.vertices_coords as number[][];
     for (const c of coords) c[0] *= 1.5;
     const report = verifyFold(result.fkld, tent);
     expect(report.converged).toBe(false);
-    expect(report.meanStrain > 0.01 || report.dH > report.epsilon || report.creaseResidual > 0.15).toBe(true);
+    const fff = report.foldFromFlat;
+    expect(
+      fff.meanStrain > 0.01 || fff.dH > report.epsilon || fff.creaseResidual > 0.15 || (fff.pathStrain ?? 0) > 0.2,
+    ).toBe(true);
+  });
+});
+
+describe("kabsch rigid alignment", () => {
+  it("recovers a known rotation + translation; never mirrors", async () => {
+    const { kabsch, applyRigid } = await import("../../../src/pipeline/verify.js");
+    // Deterministic point cloud.
+    const pts: Vec3[] = [
+      V(0, 0, 0), V(10, 0, 0), V(0, 10, 0), V(0, 0, 10), V(7, 5, 3), V(-4, 2, 8),
+    ];
+    // Known rotation: 40° about a skew axis, plus translation.
+    const ang = (40 * Math.PI) / 180;
+    const ax = { x: 1 / Math.sqrt(3), y: 1 / Math.sqrt(3), z: 1 / Math.sqrt(3) };
+    const rot = (p: Vec3): Vec3 => {
+      // Rodrigues
+      const c = Math.cos(ang), s = Math.sin(ang);
+      const d = ax.x * p.x + ax.y * p.y + ax.z * p.z;
+      return {
+        x: p.x * c + (ax.y * p.z - ax.z * p.y) * s + ax.x * d * (1 - c) + 5,
+        y: p.y * c + (ax.z * p.x - ax.x * p.z) * s + ax.y * d * (1 - c) - 3,
+        z: p.z * c + (ax.x * p.y - ax.y * p.x) * s + ax.z * d * (1 - c) + 11,
+      };
+    };
+    const moved = pts.map(rot);
+    const { R, t } = kabsch(pts, moved);
+    for (let i = 0; i < pts.length; i++) {
+      const q = applyRigid(R, t, pts[i]);
+      expect(q.x).toBeCloseTo(moved[i].x, 5);
+      expect(q.y).toBeCloseTo(moved[i].y, 5);
+      expect(q.z).toBeCloseTo(moved[i].z, 5);
+    }
+    // det(R) must be +1 (no reflection): a mirrored cloud cannot be aligned away.
+    const det =
+      R[0] * (R[4] * R[8] - R[5] * R[7]) -
+      R[1] * (R[3] * R[8] - R[5] * R[6]) +
+      R[2] * (R[3] * R[7] - R[4] * R[6]);
+    expect(det).toBeCloseTo(1, 6);
+    const mirrored = pts.map((p) => V(-p.x, p.y, p.z));
+    const m = kabsch(pts, mirrored);
+    // Best proper-rotation alignment of a mirror leaves residual error.
+    let worst = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const q = applyRigid(m.R, m.t, pts[i]);
+      worst = Math.max(worst, Math.hypot(q.x - mirrored[i].x, q.y - mirrored[i].y, q.z - mirrored[i].z));
+    }
+    expect(worst).toBeGreaterThan(1);
   });
 });
 

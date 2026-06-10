@@ -8,7 +8,8 @@ describe("pipeline/index barrel", () => {
     expect(typeof pipeline.angleDefects).toBe("function");
     expect(typeof pipeline.planCuts).toBe("function");
     expect(typeof pipeline.seamedUnfold).toBe("function");
-    expect(typeof pipeline.packPatches).toBe("function");
+    expect(typeof pipeline.placeSheet).toBe("function");
+    expect(typeof pipeline.lipSubtype).toBe("function");
     expect(typeof pipeline.emitFkld).toBe("function");
     expect(typeof pipeline.verifyFold).toBe("function");
     expect(typeof pipeline.kirigamize).toBe("function");

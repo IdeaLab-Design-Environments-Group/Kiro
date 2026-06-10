@@ -16,13 +16,21 @@ const E2E = { timeout: 120_000 };
 describe("sample STL files fold through the pipeline", () => {
   it("sample-cube.stl verifies (sim as oracle)", E2E, () => {
     const r = kirigamizeText(loadStl("sample-cube.stl"), "stl", { verify: true }).report!;
-    expect(r.converged, `dH=${r.dH?.toFixed(3)} ε=${r.epsilon?.toFixed(3)} strain=${r.meanStrain}`).toBe(true);
-    expect(r.dHRel).toBeLessThanOrEqual(0.05);
+    const f = r.foldFromFlat;
+    expect(
+      r.converged,
+      `foldFromFlat dH=${f.dH.toFixed(3)} ε=${r.epsilon.toFixed(3)} strain=${f.meanStrain} · equilibrium dH=${r.equilibrium.dH.toFixed(3)}`,
+    ).toBe(true);
+    expect(f.dHRel).toBeLessThanOrEqual(0.05);
   });
 
   it("sample-tetrahedron.stl verifies (sim as oracle)", E2E, () => {
     const r = kirigamizeText(loadStl("sample-tetrahedron.stl"), "stl", { verify: true }).report!;
-    expect(r.converged, `dH=${r.dH?.toFixed(3)} ε=${r.epsilon?.toFixed(3)} strain=${r.meanStrain}`).toBe(true);
-    expect(r.dHRel).toBeLessThanOrEqual(0.05);
+    const f = r.foldFromFlat;
+    expect(
+      r.converged,
+      `foldFromFlat dH=${f.dH.toFixed(3)} ε=${r.epsilon.toFixed(3)} strain=${f.meanStrain} · equilibrium dH=${r.equilibrium.dH.toFixed(3)}`,
+    ).toBe(true);
+    expect(f.dHRel).toBeLessThanOrEqual(0.05);
   });
 });

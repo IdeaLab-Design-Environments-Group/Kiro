@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { parseLoaded, loadedStatus, readModelFile } from "../../../src/services/model-loader.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchSample, parseLoaded, loadedStatus, readModelFile } from "../../../src/services/model-loader.js";
 import { AppError } from "../../../src/core/errors.js";
 
 const FOLD = JSON.stringify({
@@ -9,6 +9,10 @@ const FOLD = JSON.stringify({
 });
 
 describe("services/model-loader", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("parses .fold/.fkld/.json text into a fold model", () => {
     for (const name of ["a.fold", "a.fkld", "a.json"]) {
       const m = parseLoaded(FOLD, name);
@@ -62,6 +66,79 @@ describe("services/model-loader", () => {
     } finally {
       globalThis.FileReader = original;
     }
+  });
+
+  it("readModelFile forwards parse failures as AppError(parse)", () => {
+    class FileReaderMock {
+      result = "{broken";
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsText(): void {
+        this.onload?.();
+      }
+    }
+    const original = globalThis.FileReader;
+    globalThis.FileReader = FileReaderMock as unknown as typeof FileReader;
+    try {
+      const onLoaded = vi.fn();
+      const onError = vi.fn();
+      readModelFile({ name: "broken.fold" } as File, onLoaded, onError);
+
+      expect(onLoaded).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError.mock.calls[0]![0]).toBeInstanceOf(AppError);
+      expect(onError.mock.calls[0]![0].domain).toBe("parse");
+    } finally {
+      globalThis.FileReader = original;
+    }
+  });
+
+  it("readModelFile reports FileReader transport failures as AppError(io)", () => {
+    class FileReaderMock {
+      result = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsText(): void {
+        this.onerror?.();
+      }
+    }
+    const original = globalThis.FileReader;
+    globalThis.FileReader = FileReaderMock as unknown as typeof FileReader;
+    try {
+      const onError = vi.fn();
+      readModelFile({ name: "bad.fold" } as File, vi.fn(), onError);
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError.mock.calls[0]![0]).toBeInstanceOf(AppError);
+      expect(onError.mock.calls[0]![0].domain).toBe("io");
+      expect(onError.mock.calls[0]![0].message).toContain("Could not read bad.fold.");
+    } finally {
+      globalThis.FileReader = original;
+    }
+  });
+
+  it("fetchSample returns the fetched fold payload on HTTP success", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      text: async () => FOLD,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchSample("/sample.fold", "sample.fold")).resolves.toEqual({
+      kind: "fold",
+      name: "sample.fold",
+      object: JSON.parse(FOLD),
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/sample.fold");
+  });
+
+  it("fetchSample throws AppError(io) on HTTP failure", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 404 })));
+
+    await expect(fetchSample("/missing.fold", "missing.fold")).rejects.toMatchObject({
+      domain: "io",
+      message: "HTTP 404",
+    });
   });
 
   it("loadedStatus reproduces the pre-extraction status strings", () => {

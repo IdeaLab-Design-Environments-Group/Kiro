@@ -50,11 +50,25 @@
  * `VentHole`, computed by kirigamize.ts from the unfold's VentRecords) are
  * skipped. Patterns without vents keep the plain symmetric metric.
  *
- * Frame alignment: buildSceneFromFold normalizes the flat pattern by its
- * bbox centroid and scale = TARGET_SIZE/span, and applyGuidedFold transforms
- * the goal frame with the SAME numbers — so Q's samples are mapped into sim
- * space by reproducing that transform (deterministic; the driven boundary
- * pins the global pose, so no ICP is needed). ε_sim = ε_mm · scale.
+ * Frames & scaling: verification always runs at ~unit span — both scenes are
+ * rescaled (see rescaleScene) because the explicit solver's Δt bound covers
+ * only the axial mode and assumes k_axial = EA/l₀ ≫ k_crease ∝ l₀, which the
+ * adapter's display normalization (span ≈ 100) violates badly enough that
+ * solves explode. Q's samples are mapped into the shared sim frame
+ * deterministically: the rescaled scene's mm→sim scale plus the mean offset
+ * between model.goal and the emitted foldedForm frame (no ICP — the
+ * correspondence is known). ε_sim = ε_mm · scale. Before measuring d_H the
+ * settled pose is rigidly aligned onto the goal by Kabsch/Horn (quaternion
+ * method, NO reflection — see kabsch) over the known per-vertex
+ * correspondence, so settling drift does not read as coverage error while a
+ * mirror-folded sheet cannot be "aligned away" and shows up as large d_H.
+ *
+ * Future work — a fully FREE crease-driven fold from flat (no kinematic
+ * transport; the creases alone do the work): without collision handling the
+ * explicit solver explodes, freezes, or orbits in frustrated/mirror states
+ * even though the folded target is a perfect free equilibrium (the secondary
+ * check starts there and holds). Until then, fold-from-flat is transport +
+ * release, and equilibrium stays a reported metric only.
  */
 
 import { buildSceneFromFold, measureTheta, FoldSolver } from "../sim/index.js";

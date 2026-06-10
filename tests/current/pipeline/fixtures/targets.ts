@@ -249,6 +249,48 @@ export function makeTent(nx = 4, width = 100, depth = 50, height = 30): TriMesh 
   return { vertices, faces };
 }
 
+/**
+ * Double saddle fan: TWO interior δ<0 vertices sharing faces — the K1
+ * multi-vent / dynamic-excess regression target. Vertex 0 (left) at
+ * (−sep, 0, 0) and vertex 1 (right) at (+sep, 0, 0) sit inside an 8-vertex
+ * ring of radius `ringR` whose z alternates ±zAmp (the saddle waves). Each
+ * half of the ring fans to its nearest interior vertex; two bridge faces
+ * across the interior edge 0–1 (apexed at the top and bottom ring vertices)
+ * are shared by BOTH interior vertices. Disk (χ=1); ring is boundary; at the
+ * defaults δ ≈ −1.124 rad at each interior vertex (verified in vents.test.ts).
+ */
+export function makeDoubleSaddleFan(sep = 25, ringR = 60, zAmp = 20): TriMesh {
+  const A = 0; // left interior vertex
+  const B = 1; // right interior vertex
+  const vertices: Vec3[] = [
+    { x: -sep, y: 0, z: 0 },
+    { x: sep, y: 0, z: 0 },
+  ];
+  const N = 8;
+  const r = (i: number): number => 2 + (((i % N) + N) % N);
+  for (let i = 0; i < N; i++) {
+    const a = (2 * Math.PI * i) / N;
+    vertices.push({ x: ringR * Math.cos(a), y: ringR * Math.sin(a), z: i % 2 === 0 ? zAmp : -zAmp });
+  }
+  // Ring index 2 sits at 90° (top), index 6 at 270° (bottom).
+  const faces: [number, number, number][] = [
+    // right fan (apex B): ring edges whose midpoint has x > 0
+    [B, r(6), r(7)],
+    [B, r(7), r(0)],
+    [B, r(0), r(1)],
+    [B, r(1), r(2)],
+    // bridge faces sharing the interior edge A–B (top and bottom)
+    [A, B, r(2)],
+    [B, A, r(6)],
+    // left fan (apex A): ring edges whose midpoint has x < 0
+    [A, r(2), r(3)],
+    [A, r(3), r(4)],
+    [A, r(4), r(5)],
+    [A, r(5), r(6)],
+  ];
+  return { vertices, faces };
+}
+
 /** Serialize a TriMesh as minimal OBJ text (round-trip test helper). */
 export function toObj(mesh: TriMesh): string {
   const lines: string[] = [];

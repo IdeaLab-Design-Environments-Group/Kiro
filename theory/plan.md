@@ -1,22 +1,46 @@
 # Kirigamizer — build plan (general cut + fold for any surface)
 
-**Status:** **M0–M5 complete (2026-06-10).** The general model→pattern pipeline is
-implemented under `src/pipeline/` and wired into `AppController.kirigamize()`:
-OBJ/ASCII-STL → condition → angle defects → MST cut forest (+ wedge rule) →
-seamed unfold (relief loop) → shelf-pack + classify → FKLD emit (goal frame +
-driven flags) → **equilibrium verification** in the AKDE solver (d_H, bar
-strain, crease residual). Acceptance targets green: cube, saddle roof, Enneper
-patch, tent (free-vertex relaxation), octahedron tuck-all reduction/deferral.
-M6 (fabrication export, STEP) remains deferred.
+**Status:** **M0–M5 complete; PROPER-KIRIGAMI rework (K1–K5) complete (2026-06-10).**
+The general model→pattern pipeline lives under `src/pipeline/` and is wired into
+`AppController.kirigamize()`: OBJ/ASCII-STL → condition → angle defects → MST cut
+forest (≤1 boundary attachment, no boundary transit) → seamed unfold with **vents**
+(relief loop, single-sheet hard gate) → place + classify (sheetRect, vent/dart/seam
+subtypes) → FKLD emit (goalPos frame + driven flags + sheet meta) →
+**fold-from-flat verification**. M6 (fabrication export, STEP) remains deferred.
 
-**Verification note (deviation from §3 Stage 5 as originally sketched):** v1
-verifies that the folded goal pose is a *stable equilibrium* of the emitted
-pattern rather than simulating the fold path from flat. With the scaffold
-driven, the bar-and-hinge crease reactions push free fold-line nodes toward the
-mirror side (wings pinned ⇒ reactions dominate), so path-folding needs collision
-handling / a constraint solver — future work. Crease targets for guided folds
-are now derived from the goal pose itself in `src/sim/fold-adapter.ts`
-(sign-robust per-crease frames).
+## Proper-kirigami semantics (K1–K5)
+
+**The 2π invariant.** A flat sheet carries exactly 2π of material at every interior
+point. The pattern is ONE connected piece (hard-gated in `seamedUnfold`); every
+defect vertex gets a wedge **cutout** of angle |δ|:
+- **δ>0 (dart):** the cutout lies BETWEEN Q-faces — the dart gap closes when folded;
+  coverage is complete.
+- **δ<0 (vent):** a sliver of Q-coverage is removed from a face adjacent to the slit
+  (live-geometry walk, dynamic target = current excess over 2π, candidate placements
+  with rollback + connectivity trial), so the slit is ZERO-WIDTH in the flat pattern
+  and opens into a small uncovered hole when folded — the algorithm spec's
+  "open slit / deliberate hole". Synthesized split vertices carry `origVertex = −1`
+  and on-Q `goalPos`.
+
+**Verification (K4).** Primary gate = **fold-from-flat**, two phases:
+(A) kinematic transport — all vertices driven rest→goal under the fp ease, with a
+**tensile path-strain audit** sampled at fp = 0.25/0.5/0.75 (a consistent pattern
+never lengthens a bar along the linear path; chord shortening is geometric and
+tolerated); (B) **release-and-settle** — non-boundary vertices freed at fp = 1,
+the structure must hold (locked-in strain / drift / crease residual catch wrong
+patterns). d_H is Kabsch-aligned (no reflection — mirror folds fail) and
+**vent-aware**: declared coverage holes are excluded from the Q→folded direction
+only. The equilibrium mode (start at goal, relax) is reported as a secondary
+metric, never sufficient alone. Verification runs at a rescaled ~unit sim span:
+the explicit Δt bound (paper Eqs 7–8) assumes k_axial ≫ k_crease, which large
+normalization spans violate.
+
+**Documented limitation (future work).** A fully FREE crease-driven fold (no
+driving at all) is not traversable by the explicit bar-and-hinge integrator on
+multi-crease patterns — it explodes at large scales, freezes under the kinetic
+quench, and orbits under viscous damping — even though the folded state is a
+perfect free equilibrium (verified: residual exactly 0). True free-path folding
+needs collision handling / implicit integration.
 
 **Authority:** `kirigamizer_algorithms.tex` (Emre Dayangac) — the algorithm
 proposal; `origamizer_algorithms.tex` — the reused Origamizer stages. AKDE is the
