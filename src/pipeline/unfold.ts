@@ -42,6 +42,22 @@ export const RELIEF_MAX = 64;
 /** Relative tolerance for the developability audit (per edge length). */
 const AUDIT_REL = 1e-6;
 
+/**
+ * Absolute audit floor, as a fraction of the patch bbox diagonal. BFS flat
+ * placement accumulates ~1e-9·diag of FP error regardless of edge length, so
+ * a purely relative tolerance falsely flags vent-synthesized micro-edges
+ * (~1e-6 mm). Floor ≈ 1.5e-7 mm on a 150 mm model — ~200× the observed
+ * accumulation, ~700× below WELD_TOL_MM=1e-4 (conditioning.ts) and 5+ orders
+ * below legitimate features, so real violations still trip the relative term.
+ */
+const AUDIT_ABS_FRAC = 1e-9;
+
+/** Vent-walk angle snap (rad): residues below this never force a sliver split. */
+const SNAP_ANG = 1e-7;
+
+/** Vent-carve length snap (mm): crossings closer than this to an endpoint reuse it. */
+const SNAP_LEN = 1e-6;
+
 export interface CutMesh {
   mesh: TriMesh;
   /** cut vertex → source (Q) vertex; −1 for synthesized vent vertices. */
@@ -206,6 +222,7 @@ export function cutAlongEdges(
   };
 
   const ventVerts = [...ventAngles.keys()].sort((a, b) => a - b);
+  const initialLiveFaces = faces.length;
 
   // Vents may not make connectivity WORSE than the bare cut already is. A
   // disconnecting cut set is the CALLER's problem (seamedUnfold hard-gates
@@ -255,6 +272,7 @@ export function cutAlongEdges(
     const far = faces.findIndex((g, gi) => gi !== exclude && g !== null && g.includes(u1) && g.includes(u2));
     if (far === -1) return;
     const ntri = faces[far]!;
+    if (ntri.includes(mid)) return; // idempotent — same chord already inserted
     const third = ntri.find((x) => x !== u1 && x !== u2)!;
     const ia = ntri.indexOf(u1);
     if (ntri[(ia + 1) % 3] === u2) {
@@ -303,59 +321,104 @@ export function cutAlongEdges(
       const wy = apex.y - pu.y;
       const r = cross2(wx, wy, -ray.x, -ray.y) / det;
       const s = cross2(ex, ey, wx, wy) / det;
-      if (!(r > 1e-7 && r < 1 - 1e-7) || s <= 0) return null;
+      // Length-aware window: crossings within SNAP_LEN of u reuse u via the
+      // single-crossing branches; near t the leftover ≤SNAP_LEN in-cone sliver
+      // stays (below the shrink-SAT registration — see "degenerate slivers").
+      const tEps = Math.min(0.5, SNAP_LEN / Math.hypot(ex, ey));
+      if (r < tEps || r > 1 - tEps || s <= 0) return null;
       return r;
     };
 
+    const lerpOnEdge = (() => {
+      // Dedup splits closer than SNAP_LEN along the same segment — every
+      // coordinate set (3D/goal/flat) lerps with the same r, so 3D rest
+      // length is the right yardstick for all of them.
+      const cache = new Map<string, { r: number; id: number }[]>();
+      return (u: number, w: number, r: number): number => {
+        const key = edgeKey(u, w);
+        const rc = u < w ? r : 1 - r; // canonical orientation (matches key)
+        const segLen = distance(vertices[u], vertices[w]);
+        const splits = cache.get(key) ?? [];
+        const hit = splits.find((s) => Math.abs(s.r - rc) * segLen < SNAP_LEN);
+        if (hit !== undefined) return hit.id;
+        const id = lerpVertex(u, w, r);
+        splits.push({ r: rc, id });
+        cache.set(key, splits);
+        return id;
+      };
+    })();
+
     const queue = [...frontier];
     const done = new Set<string>();
+    const pending = new Set<string>();
+    for (const [a, b] of frontier) pending.add(edgeKey(a, b));
+    const pushEdge = (a: number, b: number): void => {
+      const key = edgeKey(a, b);
+      if (done.has(key) || pending.has(key)) return;
+      pending.add(key);
+      queue.push([a, b]);
+    };
+
+    const guardMax = Math.max(64, faces.length * 8);
     let guard = 0;
-    while (queue.length > 0 && guard++ < 10_000) {
+    while (queue.length > 0 && guard++ < guardMax) {
       const [x, y] = queue.pop()!;
       const key = edgeKey(x, y);
+      pending.delete(key);
       if (done.has(key)) continue;
       done.add(key);
-      const g = faces.findIndex((tri) => tri !== null && tri.includes(x) && tri.includes(y));
-      if (g === -1) continue; // sheet boundary (or already carved)
-      const t = faces[g]!.find((vv) => vv !== x && vv !== y)!;
-      const s1 = sideOf(d1, flat[t]);
-      const s2 = sideOf(d2, flat[t]);
-      if (s1 >= 0 && s2 <= 0) {
-        // Third corner on/inside the cone: the whole face goes; keep carving.
-        faces[g] = null;
-        queue.push([x, t], [t, y]);
-        continue;
+
+      let carved = false;
+      for (let gi = 0; gi < faces.length; gi++) {
+        const tri = faces[gi];
+        if (tri === null || !tri.includes(x) || !tri.includes(y)) continue;
+        const t = tri.find((vv) => vv !== x && vv !== y)!;
+        const s1 = sideOf(d1, flat[t]);
+        const s2 = sideOf(d2, flat[t]);
+        if (s1 >= 0 && s2 <= 0) {
+          // Third corner on/inside the cone: excise every live piece on (x, y).
+          faces[gi] = null;
+          pushEdge(x, t);
+          pushEdge(t, y);
+          carved = true;
+          continue;
+        }
+        // Exactly one ray separates t from the cone; chord it off.
+        const ray = s1 < 0 ? d1 : d2;
+        const rx = crossingOn(ray, x, t);
+        const ry = crossingOn(ray, y, t);
+        if (rx !== null && ry !== null) {
+          // Chord crosses both far edges: keep the t-corner piece only.
+          const wa = lerpOnEdge(x, t, rx);
+          const wb = lerpOnEdge(y, t, ry);
+          faces[gi] = tri.map((vv) => (vv === x ? wa : vv === y ? wb : vv)) as [number, number, number];
+          ventEdges.push([wa, wb]);
+          splitFarAt(x, t, wa, gi);
+          splitFarAt(y, t, wb, gi);
+          pushEdge(x, wa);
+          pushEdge(y, wb);
+          carved = true;
+        } else if (ry !== null) {
+          // x sits on the chord ray: keep (x, w, t), drop (x, y, w).
+          const w = lerpOnEdge(y, t, ry);
+          faces[gi] = tri.map((vv) => (vv === y ? w : vv)) as [number, number, number];
+          ventEdges.push([x, w]);
+          splitFarAt(y, t, w, gi);
+          pushEdge(y, w);
+          carved = true;
+        } else if (rx !== null) {
+          // y sits on the chord ray: keep (w, y, t), drop (x, y, w).
+          const w = lerpOnEdge(x, t, rx);
+          faces[gi] = tri.map((vv) => (vv === x ? w : vv)) as [number, number, number];
+          ventEdges.push([y, w]);
+          splitFarAt(x, t, w, gi);
+          pushEdge(x, w);
+          carved = true;
+        }
+        // Degenerate slivers (no usable crossing) are left in place — they are
+        // thinner than the SAT shrink tolerance and harmless.
       }
-      // Exactly one ray separates t from the cone; chord it off.
-      const ray = s1 < 0 ? d1 : d2;
-      const rx = crossingOn(ray, x, t);
-      const ry = crossingOn(ray, y, t);
-      if (rx !== null && ry !== null) {
-        // Chord crosses both far edges: keep the t-corner piece only.
-        const wa = lerpVertex(x, t, rx);
-        const wb = lerpVertex(y, t, ry);
-        faces[g] = faces[g]!.map((vv) => (vv === x ? wa : vv === y ? wb : vv)) as [number, number, number];
-        ventEdges.push([wa, wb]);
-        splitFarAt(x, t, wa, g);
-        splitFarAt(y, t, wb, g);
-        queue.push([x, wa], [y, wb]);
-      } else if (ry !== null) {
-        // x sits on the chord ray: keep (x, w, t), drop (x, y, w).
-        const w = lerpVertex(y, t, ry);
-        faces[g] = faces[g]!.map((vv) => (vv === y ? w : vv)) as [number, number, number];
-        ventEdges.push([x, w]);
-        splitFarAt(y, t, w, g);
-        queue.push([y, w]);
-      } else if (rx !== null) {
-        // y sits on the chord ray: keep (w, y, t), drop (x, y, w).
-        const w = lerpVertex(x, t, rx);
-        faces[g] = faces[g]!.map((vv) => (vv === x ? w : vv)) as [number, number, number];
-        ventEdges.push([y, w]);
-        splitFarAt(x, t, w, g);
-        queue.push([x, w]);
-      }
-      // Degenerate slivers (no usable crossing) are left in place — they are
-      // thinner than the SAT shrink tolerance and harmless.
+      if (!carved) continue; // sheet boundary (or already carved)
     }
   };
 
@@ -422,9 +485,13 @@ export function cutAlongEdges(
           (g, gi) => gi !== f && g !== null && g.includes(lead) && g.includes(trail),
         );
 
-        if (remaining >= alpha - ANG_EPS) {
+        // Consume whole faces with a SNAP_ANG slack (over-removal ≤ 1e-7 rad,
+        // well inside the 2π invariant tolerance) and zero near-zero residues
+        // so a stray FP crumb never forces a sliver split on the next face.
+        if (remaining >= alpha - SNAP_ANG) {
           faces[f] = null;
           remaining -= alpha;
+          if (remaining < SNAP_ANG) remaining = 0;
           coneEnd = trail;
           frontier.push([lead, trail]);
           if (farNeighbor !== -1) ventEdges.push([lead, trail]);
@@ -437,7 +504,13 @@ export function cutAlongEdges(
         const lvl = distance(vertices[vc], vertices[lead]);
         const llt = distance(vertices[lead], vertices[trail]);
         const am = (lvl * Math.sin(remaining)) / Math.sin(beta + remaining);
-        const t = Math.min(1 - 1e-9, Math.max(1e-9, am / llt));
+        const t = am / llt;
+        // SNAP_ANG bounds remaining away from 0 and alpha here, so t cannot
+        // be degenerate; if it is, fail loudly rather than synthesize a
+        // near-zero-length edge that poisons the isometry audit downstream.
+        if (!(t > 0 && t < 1)) {
+          throw new PipelineError("unfold", `vent split parameter ${t} out of (0,1) at vertex ${vc}`, { vertex: vc });
+        }
         const pl = vertices[lead];
         const pt = vertices[trail];
         const m3 = { x: pl.x + t * (pt.x - pl.x), y: pl.y + t * (pt.y - pl.y), z: pl.z + t * (pt.z - pl.z) };
@@ -641,6 +714,19 @@ export function unfoldPatch(cut: CutMesh, patchFaces: number[]): Vec2[] {
 
   const d3 = (a: number, b: number): number => distance(mesh.vertices[a], mesh.vertices[b]);
 
+  // Absolute audit floor scaled to the patch extent (see AUDIT_ABS_FRAC).
+  let lo = { x: Infinity, y: Infinity, z: Infinity };
+  let hi = { x: -Infinity, y: -Infinity, z: -Infinity };
+  for (const f of patchFaces) {
+    for (const v of mesh.faces[f]) {
+      const p = mesh.vertices[v];
+      lo = { x: Math.min(lo.x, p.x), y: Math.min(lo.y, p.y), z: Math.min(lo.z, p.z) };
+      hi = { x: Math.max(hi.x, p.x), y: Math.max(hi.y, p.y), z: Math.max(hi.z, p.z) };
+    }
+  }
+  const diag = Math.hypot(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
+  const auditAbs = AUDIT_ABS_FRAC * diag;
+
   // Seed: first face at the origin, first edge along +x, third vertex at +y.
   const f0 = patchFaces[0];
   const [s0, s1, s2] = mesh.faces[f0];
@@ -687,7 +773,7 @@ export function unfoldPatch(cut: CutMesh, patchFaces: number[]): Vec2[] {
         } else {
           const err = Math.hypot(flat[gc]!.x - pos.x, flat[gc]!.y - pos.y);
           const scale = Math.max(d3(a, gc), d3(b, gc), 1e-12);
-          if (err > AUDIT_REL * scale * 10) {
+          if (err > AUDIT_REL * scale * 10 + auditAbs) {
             throw new PipelineError(
               "unfold",
               `developability audit failed: vertex ${gc} placed inconsistently (err ${err.toExponential(2)} mm) — patch is not developable (planner bug)`,
@@ -712,7 +798,7 @@ export function unfoldPatch(cut: CutMesh, patchFaces: number[]): Vec2[] {
     }
     const lFlat = Math.hypot(pb.x - pa.x, pb.y - pa.y);
     const l3 = d3(a, b);
-    if (Math.abs(lFlat - l3) > AUDIT_REL * Math.max(l3, 1e-12) * 10) {
+    if (Math.abs(lFlat - l3) > AUDIT_REL * Math.max(l3, 1e-12) * 10 + auditAbs) {
       throw new PipelineError("unfold", `isometry audit failed on edge ${key}: flat ${lFlat} vs rest ${l3}`);
     }
   }

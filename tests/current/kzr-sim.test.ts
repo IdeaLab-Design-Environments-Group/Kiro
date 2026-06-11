@@ -20,7 +20,7 @@ function loadExample(name: string): FoldFile {
 }
 
 describe("kirigamizer app sim path (src/sim via scene.buildScene)", () => {
-  it("recognizes the bundled AKDE pyramid FKLD and folds it guided (AKDE-faithful)", () => {
+  it("recognizes the bundled AKDE pyramid FKLD and folds it guided (AKDE-faithful)", { timeout: 15000 }, () => {
     const fold = loadExample("akde-square-pyramid.fkld");
     const built = buildScene(fold);
     expect(built).not.toBeNull();

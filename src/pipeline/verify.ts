@@ -466,7 +466,7 @@ export function verifyFold(
   // --- shared frame: build the rescaled flat scene FIRST and derive the
   // mm → sim map + targetSim from it (both scenes are rescaled identically,
   // so the frame is shared) ---------------------------------------------------
-  const flatScene = buildSceneFromFold(fkld);
+  const flatScene = buildSceneFromFold(fkld, undefined, { splitCuts: false });
   rescaleScene(flatScene);
   const scale = flatScene.net.meta.scale;
   const frames = fkld.file_frames as
@@ -574,7 +574,7 @@ export function verifyFold(
   flat.metrics.pathStrain = pathStrain;
 
   // --- 2. equilibrium (secondary) ---------------------------------------------
-  const eqScene = buildSceneFromFold(fkld);
+  const eqScene = buildSceneFromFold(fkld, undefined, { splitCuts: false });
   rescaleScene(eqScene);
   eqScene.model.position.set(eqScene.model.goal);
   eqScene.model.velocity.fill(0);

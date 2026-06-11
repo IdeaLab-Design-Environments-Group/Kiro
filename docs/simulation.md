@@ -1,80 +1,108 @@
 # Simulation
 
-The simulation subsystem implements the explicit bar-and-hinge origami model
-from Ghassaei, Demaine, and Gershenfeld, with kirigami-specific scene builders.
-It is intentionally split from the Three.js view.
+The 3D Sim is a **1:1 TypeScript port of Amanda Ghassaei's Origami Simulator**
+(Ghassaei, Demaine & Gershenfeld, *Fast, Interactive Origami Simulation using
+GPU Computation*, 7OSME 2018, MIT-licensed). One uniform engine folds **any
+origami or kirigami**; the mode is **inferred from the file**, not hardcoded.
 
-## Core Model
+## Pipeline
 
-`src/sim/model.ts` builds a struct-of-arrays `BarHingeModel`:
+```
+FOLD/FKLD ──▶ fold-ops.ts ──▶ origami-import.ts ──▶ FoldSolver ──▶ sim-canvas.ts
+            (preprocess)      (assemble + infer)    (step)        (render)
+```
 
-- Nodes: position, rest position, velocity, force, mass, fixed/driven flags.
-- Beams: axial springs on mesh edges.
-- Creases: torsional springs on foldable interior edges.
-- Faces: interior-angle springs to resist shearing.
+### 1. Preprocess — `src/sim/fold-ops.ts`
 
-The paper convention is:
+A faithful port of `js/pattern.js` from the original simulator:
 
-- Mountain targets are negative fold angles.
-- Valley targets are positive fold angles.
-- Crease stiffness is proportional to nominal edge length.
-- Axial stiffness uses `EA / l0`.
+- **`splitCuts`** — the kirigami mechanism. Every `"C"` (cut) edge is duplicated
+  into two boundary edges and the shared vertices around each cut discontinuity
+  are duplicated, so the two lips of a cut become **independent nodes that open
+  into a gap** as the sheet folds. All FKLD cut subtypes (major / minor / seam /
+  dart / eyelet) are encoded as `"C"` in `edges_assignment`, so this handles
+  them uniformly. Vertex provenance (`originOf`) is tracked through the split so
+  a declared folded-form can be mapped back onto the split mesh.
+- **`triangulatePolys`** — triangles pass through; quads split on the shorter
+  diagonal (OS-exact); n-gons fan. New diagonals become facet (`"F"`) creases.
+- **`getFacesAndVerticesForEdges`** — extracts, per M/V/F crease, its two
+  incident faces and their opposite "wing" vertices in a **winding-consistent
+  order** (the reorder at `pattern.js:797`). This is what makes the measured
+  dihedral sign reliable, so a plain forward fold folds the right way.
 
-`src/sim/forces.ts` computes the solver passes:
+### 2. Assemble + infer mode — `src/sim/origami-import.ts`
 
-1. Face normals.
-2. Signed fold angles.
-3. Axial, crease, face, and damping forces.
-4. Explicit Euler integration.
+Builds the struct-of-arrays `BarHingeModel` exactly as `js/model.js` `sync` +
+`js/dynamicSolver.js` do: a Node per vertex (unit mass), a Beam per edge
+(`k = EA/l₀`), a Crease per M/V/F edge (`k = creaseStiffness·l₀`,
+`targetTheta = fold angle`, type 0 = facet driven flat), an interior-angle
+spring per triangle. Geometry is centred and scaled to bounding-sphere radius 1.
 
-`src/sim/solver.ts` is the CPU reference solver. `src/sim/gpu/` packs the same
-model into textures and runs an equivalent Three.js `GPUComputationRenderer`
-path where available.
+**Target fold angles**: explicit `edges_foldAngles` (radians) → `edges_foldAngle`
+(degrees) → assignment default (mountain −π, valley +π, facet 0). Mountains fold
+to negative θ, valleys to positive (paper §2.3).
 
-## Scene Builders
+**Adaptive fold-mode inference** (`applyDeclaredGoal`):
 
-There are two ways to build a simulation scene:
+- If the FKLD declares a **folded-form footprint** — a `foldedForm` frame +
+  `fkld:vertices_driven` (the generator's statement of "this is the 3D shape I
+  lift into and these boundary nodes hold it") — that minimal boundary is
+  **driven** to its designed positions so the forward fold lands the intended
+  shape. This is how a floppy kirigami (e.g. the AKDE pyramid, whose cone is
+  *not* a free equilibrium) cones instead of splaying. It is **not**
+  pyramid-specific: any kirigami that declares a footprint is guided to it.
+- Otherwise the model is **free** and folds by crease targets alone — the
+  paper's uniform method (origami, honeycomb kirigami, anything self-supporting).
 
-| Mode | Entry | Behavior |
-| --- | --- | --- |
-| Guided | `buildFoldScene(computeState(inputs))` | Rebuilds an AKDE pyramid and drives boundary nodes to a goal mesh. |
-| Free | `buildSceneFromFold(fold)` | Uses FOLD/FKLD topology and crease targets directly. |
+Goal alignment is translation-only (matching driven-node centroids). Crease
+targets are measured from the goal only where it is trustworthy (globally
+isometric, or all four crease nodes driven), because a declared goal can be a
+chimera (real positions for driven vertices, flat coords for the rest).
 
-`src/sim/scene.ts` chooses the mode:
+### 3. Solve — `src/sim/forces.ts` + `solver.ts`
 
-- If an FKLD frame title encodes pyramid inputs (`N`, `L`, `H`, `T`), it uses
-  guided mode.
-- Otherwise, if the object has vertices, faces, and edges, it uses free mode.
+`forces.ts` is the paper's force math verbatim (axial Eq 1; crease Eqs 2–6 via
+the cotangent projection weights; face §2.4; explicit Euler Eqs 7–8; per-edge
+viscous damping `c = 2ζ√(k·m)`). `FoldSolver.foldPercent` (0→1) scales every
+crease's target dihedral — the standard fold-percent slider. `dt = 0.9/(2π·ω_max)`,
+`ω_max = max √(k_axial/m_min)`. `src/sim/gpu/` packs the same model into textures
+for the WebGL path.
 
-## Rendering Boundary
+### Constants (`js/globals.js`)
 
-`src/view/sim-canvas.ts` owns rendering and animation policy:
+`EA = 20`, `k_fold = 0.7`, `k_facet = 0.7`, `k_face = EA/100 = 0.2`,
+`ζ (percentDamping) = 0.85`, beam damping uploaded as `getD()·0.5`. These apply
+**uniformly** to origami and kirigami (the bespoke AKDE overdamping is retired).
 
-- It renders faces and colored crease/cut lines with Three.js.
-- It picks GPU for guided scenes when available.
-- It falls back to CPU when GPU support is unavailable.
-- It uses extra damping/freeze behavior for unguided free folds, because a free
-  explicit mesh can drift and ring.
+## Routing — `src/sim/scene.ts`
 
-The simulation domain does not import Three.js or DOM APIs except inside
-`src/sim/gpu/*`, which is GPU solver infrastructure rather than UI.
+| File | Mode |
+| --- | --- |
+| Declares a folded-form footprint (hex, decagon presets) | **guided** (faithful split mesh driven to it) |
+| Foldable FKLD pyramid preset, no footprint (legacy square export) | **guided** via `buildFoldScene` recompute fallback |
+| Any other foldable origami / kirigami | **free** |
+| Non-foldable but recoverable pyramid spec (`frame_title` only) | **guided** via `buildFoldScene` |
 
-## Practical Debugging
+## Coordinate convention
 
-When a fold goes the wrong direction:
+The original embeds the flat sheet in the x-z plane (`[x,0,y]`). We embed it in
+the **x-y plane (`[x,y,0]`)** so the fold lifts along **+z** — a pure axis
+relabel (physically identical) that matches the z-up Three.js viewer and the
+z-up authored `foldedForm` frames, keeping the translation-only goal alignment
+valid.
 
-1. Check `edges_assignment`: `M` should produce negative target theta, `V`
-   positive target theta.
-2. Check `edges_foldAngle`: FOLD stores degrees; `fold-adapter.ts` converts to
-   radians.
-3. Check crease orientation: `model.ts` orients the shared edge from face1's
-   winding so signed theta is stable.
-4. Use a two-triangle hinge case before debugging a full pattern.
+## Practical debugging
 
-When a fold jitters:
-
-1. Confirm cut edges are not being converted into crease hinges.
-2. Confirm the timestep comes from `computeDt`.
-3. Lower stiffness or add damping only after checking topology.
-4. For free FOLD patterns, expect more damping than guided AKDE pyramids.
-
+- A fold goes the wrong way → check `edges_assignment` (M ⇒ negative target θ);
+  the winding-consistent crease extraction makes the sign reliable.
+- A kirigami won't open → confirm cut edges are `"C"` and `splitCuts` ran
+  (model has more nodes than the flat pattern's vertex count).
+- A kirigami splays instead of forming its 3D shape → it is floppy and needs a
+  declared `foldedForm` + `fkld:vertices_driven` footprint; without one it
+  free-folds to whatever stable state it finds.
+- Blank / missing faces (holes showing the background) → preprocessing dropped
+  faces. `removeRedundantVertices` must not merge **face-corner** vertices (only
+  edge-splitting artifacts); a guard preserves thin molecule-dart slivers. Check
+  `model.faces.count` equals the FKLD's triangular `faces_vertices.length`.
+- Jitter → the free path uses rigid-body-motion removal + a kinetic-energy
+  quench (`stabilize.ts`); the timestep must come from `computeDt`.

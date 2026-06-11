@@ -1,12 +1,33 @@
 # Kirigamizer — build plan (general cut + fold for any surface)
 
-**Status:** **M0–M5 complete; PROPER-KIRIGAMI rework (K1–K5) complete (2026-06-10).**
+**Status:** **M0–M5 complete; PROPER-KIRIGAMI rework (K1–K5) complete (2026-06-10).
+Cut-placement improvements complete (2026-06-10): vis routing, hybrid strategy,
+leaf pruning.**
 The general model→pattern pipeline lives under `src/pipeline/` and is wired into
 `AppController.kirigamize()`: OBJ/ASCII-STL → condition → angle defects → MST cut
 forest (≤1 boundary attachment, no boundary transit) → seamed unfold with **vents**
 (relief loop, single-sheet hard gate) → place + classify (sheetRect, vent/dart/seam
 subtypes) → FKLD emit (goalPos frame + driven flags + sheet meta) →
 **fold-from-flat verification**. M6 (fabrication export, STEP) remains deferred.
+
+## Cut-placement improvements (2026-06-10)
+
+Three improvements to `src/pipeline/plan-cuts.ts` (all backwards-compatible; λ=0
++ strategy="dart" + leafPruning=false reproduce original behaviour exactly):
+
+- **vis(e) routing** (`PlanOptions.lambda`): edge weights are now
+  `w(e) = len(e) + λ·vis(e)`, `vis(e) = 1 − |θ_e|/π`. With λ>0, cuts prefer
+  high-dihedral (fold/ridge) edges. `cost.visibility` records the accumulated
+  visibility component of the selected cut set.
+- **Hybrid dart-vs-tuck** (`strategy: "hybrid"`): per-vertex cost comparison —
+  `dartCost = boundarySol.dist[v]` (weighted path to boundary) vs.
+  `tuckCost = tuckCostScale·δ(v)·r̄(v)` (molecule-size proxy). Chooses dart iff
+  path is shorter than the tuck molecule. Closed meshes (no boundary) fall back
+  to dart. Uses the pre-computed `boundarySol` (already needed for the MST step).
+- **Leaf pruning** (`leafPruning: true`, `leafPruneDeltaMax`): post-MST pass
+  iteratively demotes degree-1 dart leaves with δ < maxDelta to tuck, dropping
+  their branch. Reduces total cut length on nearly-flat vertex-tips. Off by default
+  (δ>0 tuck crease generation is still deferred in M6).
 
 ## Proper-kirigami semantics (K1–K5)
 

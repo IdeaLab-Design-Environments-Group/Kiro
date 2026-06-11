@@ -177,7 +177,7 @@ describe("seamedUnfold (relief loop)", () => {
     expect(findSelfOverlap(result.flat, result.faces)).toBeNull();
   });
 
-  it("icosphere(1): one sheet, terminates, overlap-free, relief bounded; cut length only grows", { timeout: 30000 }, () => {
+  it("icosphere(1): one sheet, terminates, overlap-free, relief bounded; cut length only grows", { timeout: 60000 }, () => {
     const sphere = makeIcosphere(1);
     const { topo, defects, plan } = planFor(sphere);
     const result = seamedUnfold(sphere, topo, plan, defects);

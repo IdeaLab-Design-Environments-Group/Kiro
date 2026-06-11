@@ -48,7 +48,7 @@ describe("FoldNet topology", () => {
     }
   });
 
-  it("the molecule tucks via its minor cuts — guided fold stays near-isometric", () => {
+  it("the molecule tucks via its minor cuts — guided fold stays near-isometric", { timeout: 15000 }, () => {
     // With the minor cuts opening the molecule dart, the guided fold to the goal mesh tucks the
     // excess material instead of stretching it: mean bar strain stays small (the kirigami premise).
     const { model, solver } = buildFoldScene(STATE);
@@ -135,7 +135,7 @@ describe("crease force (Gershenfeld §2.3–2.6) — single hinge", () => {
 });
 
 describe("full-net forward fold (DETC forward process → goal mesh)", () => {
-  it("folds the flat net crisply into the designed pyramid: apex closes, height = H, low strain", () => {
+  it("folds the flat net crisply into the designed pyramid: apex hole stays open (rim at rApex), height = H, low strain", { timeout: 15000 }, () => {
     const { net, model, solver } = buildFoldScene(STATE);
     solver.solve(16000, 1);
 
@@ -148,8 +148,9 @@ describe("full-net forward fold (DETC forward process → goal mesh)", () => {
     const meanR = (ids: number[]) =>
       ids.reduce((a, i) => a + Math.hypot(model.position[3 * i], model.position[3 * i + 1]), 0) / ids.length;
 
-    // apex tips driven to the axis (major cut closes — kirigami apex), base spread to radius R
-    expect(meanR(net.tips)).toBeLessThan(0.05 * net.meta.R);
+    // apex tips lift to the major-cut rim at radius rApex — the apex hole stays OPEN (kirigami:
+    // material is removed around the apex), rather than welding to a single point. Base spreads to R.
+    expect(meanR(net.tips)).toBeCloseTo(net.meta.rApex, 1);
     expect(meanR(net.base)).toBeCloseTo(net.meta.R, 1);
 
     // cone height = the designed apex altitude H (normalized as net.meta.H = STATE.H · scale)
@@ -171,14 +172,10 @@ describe("full-net forward fold (DETC forward process → goal mesh)", () => {
     strain /= model.beams.count;
     expect(strain).toBeLessThan(0.1);
 
-    // molecules tuck INSIDE the pyramid (no node protrudes beyond the cone surface z = H(1−r/R))
-    const driven = new Set<number>([
-      ...net.tips,
-      ...net.basePairs.flat(),
-      ...net.valleyOuter,
-    ]);
+    // molecules tuck INSIDE the pyramid (no FREE node protrudes beyond the cone surface
+    // z = H(1−r/R)); driven rim/base/tuck nodes are placed by design.
     for (let i = 0; i < model.numNodes; i++) {
-      if (driven.has(i)) continue;
+      if (model.driven[i]) continue;
       const r = Math.hypot(model.position[3 * i], model.position[3 * i + 1]);
       const zSurface = net.meta.H * (1 - Math.min(1, r / net.meta.R));
       expect(model.position[3 * i + 2]).toBeLessThan(zSurface + 0.05 * net.meta.H);

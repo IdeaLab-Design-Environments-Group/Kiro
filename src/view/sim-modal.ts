@@ -112,10 +112,15 @@ export class SimModal {
     try {
       this.canvas.setScene(built.scene);
       this.applyFold();
+      this.canvas.warmToTarget();
       this.canvas.start();
       const { net } = built.scene;
+      const shell = net.meta.N > 0 && net.faces.length === 7 * net.meta.N;
+      const triLabel = shell
+        ? `${net.faces.length} tris (${net.meta.N}-tri shell at full fold)`
+        : `${net.faces.length} tris`;
       this.statusEl.textContent =
-        `Folding ${built.title} — ${net.vertices.length} verts, ${net.faces.length} tris, ` +
+        `Folding ${built.title} — ${net.vertices.length} verts, ${triLabel}, ` +
         `${net.edges.filter((e) => e.faces.length >= 2).length} creases. Drag to orbit.`;
     } catch (err) {
       this.statusEl.textContent = `Cannot simulate this model: ${(err as Error).message}`;

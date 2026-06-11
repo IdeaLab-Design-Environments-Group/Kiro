@@ -103,18 +103,30 @@ describe("target defaults and stiffness rules (paper §2.3, §3)", () => {
     expect(Math.sign(m.model.creases.targetTheta[0])).not.toBe(Math.sign(v.model.creases.targetTheta[0]));
   });
 
+  it("edges_foldAngles (OrigamiSimulator): radians pass through unchanged", () => {
+    const base = hinge("V", null);
+    delete base.edges_foldAngle;
+    const scene = buildSceneFromFold({
+      ...base,
+      edges_foldAngles: [0, Math.PI, 0, 0, 0],
+    });
+    expect(scene.model.creases.targetTheta[0]).toBeCloseTo(Math.PI, 5);
+  });
+
   it("explicit angles are NOT clamped (−170° survives past the FKLD 2.7 rad clamp)", () => {
     const scene = buildSceneFromFold(hinge("M", -170));
     expect(Math.abs(scene.model.creases.targetTheta[0])).toBeCloseTo((170 * Math.PI) / 180, 5);
   });
 
-  it('"U" and missing assignments are undriven: k_crease = 0 (free hinge)', () => {
+  it('"U" and missing assignments produce NO crease (free hinge — beam only, paper §2.3)', () => {
+    // The faithful port (OS getFacesAndVerticesForEdges) only makes creases for M/V/F edges; an
+    // undriven hinge is just an axial beam with no torsional spring across it.
     const u = buildSceneFromFold(hinge("U", null));
-    expect(u.model.creases.k[0]).toBe(0);
+    expect(u.model.creases.count).toBe(0);
     const none = hinge("M", null);
     delete none.edges_assignment;
     const free = buildSceneFromFold(none);
-    expect(free.model.creases.k[0]).toBe(0);
+    expect(free.model.creases.count).toBe(0);
   });
 
   it('"F" facet creases are driven flat with k = l₀·k_facet', () => {
@@ -124,17 +136,21 @@ describe("target defaults and stiffness rules (paper §2.3, §3)", () => {
     expect(l0).toBeGreaterThan(0); // = rest length of the crease edge (sim units)
   });
 
-  it("paper constants: ζ = 0.45 for plain FOLD; FKLD keeps the AKDE overdamping", () => {
-    expect(ORIGAMI_PARAMS.zeta).toBe(0.45);
+  it("OrigamiSimulator constants apply UNIFORMLY: ζ = 0.85, beamDampingScale = 0.5 (origami and FKLD alike)", () => {
+    expect(ORIGAMI_PARAMS.zeta).toBe(0.85);
+    expect(ORIGAMI_PARAMS.beamDampingScale).toBe(0.5);
     expect(ORIGAMI_PARAMS.EA).toBe(20);
     expect(ORIGAMI_PARAMS.kFold).toBe(0.7);
     expect(ORIGAMI_PARAMS.kFacet).toBe(0.7);
     expect(ORIGAMI_PARAMS.kFace).toBe(0.2);
     const plain = buildSceneFromFold(hinge("M", -90));
-    expect(plain.model.params.zeta).toBe(0.45);
+    expect(plain.model.params.zeta).toBe(0.85);
+    expect(plain.model.params.beamDampingScale).toBe(0.5);
+    // The 1:1 port retires the bespoke AKDE overdamping: FKLD uses the SAME OrigamiSimulator params.
     const fkldHinge = { ...hinge("M", 90), "fkld:edges_cutType": [null, null, null, null, null] };
     const fkldScene = buildSceneFromFold(fkldHinge);
-    expect(fkldScene.model.params.zeta).toBe(1.0);
+    expect(fkldScene.model.params.zeta).toBe(0.85);
+    expect(fkldScene.model.params.beamDampingScale).toBe(0.5);
   });
 });
 

@@ -118,7 +118,8 @@ export function packModel(m: BarHingeModel, zeta: number): PackedModel {
       beamMeta[4 * bIdx] = k;
       beamMeta[4 * bIdx + 1] = other;
       beamMeta[4 * bIdx + 2] = m.beams.rest[b];
-      beamMeta[4 * bIdx + 3] = 2 * zeta * Math.sqrt(k * Math.min(m.mass[i], m.mass[other]));
+      beamMeta[4 * bIdx + 3] =
+        2 * zeta * m.params.beamDampingScale * Math.sqrt(k * Math.min(m.mass[i], m.mass[other]));
       bIdx++;
     }
     nodeMeta[4 * i + 2] = cIdx;

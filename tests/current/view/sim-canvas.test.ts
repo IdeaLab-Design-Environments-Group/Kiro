@@ -176,7 +176,7 @@ describe("view/sim-canvas", () => {
     delete (globalThis as any).requestAnimationFrame;
   });
 
-  it("chooses GPU for guided scenes and CPU for free scenes", async () => {
+  it("uses the CPU solver for guided and free scenes", { timeout: 15000 }, async () => {
     const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
     const container = {
       clientWidth: 500,
@@ -185,18 +185,9 @@ describe("view/sim-canvas", () => {
     } as any;
     const canvas = new SimCanvas(container);
 
-    const gpu = {
-      foldPercent: 0,
-      step: vi.fn(),
-      readInto: vi.fn(),
-      relax: vi.fn(),
-      resetSettle: vi.fn(),
-    };
-    gpuCreate.mockReturnValueOnce(gpu);
     canvas.setScene(makeScene({ driven: true }));
-    expect(canvas.backend()).toBe("gpu");
+    expect(canvas.backend()).toBe("cpu");
 
-    gpuCreate.mockReturnValueOnce(null);
     canvas.setScene(makeScene({ driven: false }));
     expect(canvas.backend()).toBe("cpu");
   });

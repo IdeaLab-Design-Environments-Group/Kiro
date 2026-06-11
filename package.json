@@ -12,12 +12,12 @@
   "devDependencies": {
     "@types/node": "^22.19.20",
     "@types/three": "^0.169.0",
-    "coffeescript": "^2.7.0",
     "typescript": "~5.8.3",
     "vite": "^6.3.5",
     "vitest": "^3.2.6"
   },
   "dependencies": {
+    "@dayangac/fkld": "^0.2.0",
     "three": "^0.169.0"
   }
 }

@@ -1,13 +1,11 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { FoldScene, FoldSolver } from "../sim/index.js";
+import type { FoldNet, FoldScene, FoldSolver } from "../sim/index.js";
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
-import { GpuFoldSolver } from "../sim/gpu/index.js";
 
 /**
  * Three.js viewport for the forward fold — renders the FoldNet as lit triangle faces plus
- * mountain/valley/boundary/cut lines, driving the GPU bar-and-hinge solver (`GpuFoldSolver`,
- * Gershenfeld GPGPU), falling back to the CPU `FoldSolver`.
+ * mountain/valley/boundary/cut lines, driving the CPU `FoldSolver` (the unit-tested reference).
  *
  * Anti-twitch (model-level): a frustrated kirigami mesh (cut-induced floppy DOF + a driven
  * boundary) has no force-balanced state reachable by plain viscous damping — that only orbits a
@@ -19,8 +17,14 @@ import { GpuFoldSolver } from "../sim/gpu/index.js";
  * scale-relative threshold the view **freezes** (stops stepping); a hard frame cap freezes regardless.
  * (Rigid-body-motion removal is applied only to FREE folds — it fights a driven/pinned mesh.)
  *
- * Anti-overlap: the camera near/far planes are tightened to the model scale each load, so the depth
- * buffer has enough precision that coincident folded faces don't z-fight (flicker through each other).
+ * Anti-overlap (uniform-pyramid presets): the mesh is split into a lateral-shell layer and a
+ * molecule layer sharing one position buffer. Molecules carry a deeper polygonOffset, so when
+ * they tuck coincident with the lateral faces mid-fold the laterals deterministically win the
+ * depth test (no z-fight flicker). AT FULL FOLD the molecule layer and crease overlays hide
+ * entirely and the N apex tips snap to one point — only the clean N-triangle shell remains.
+ * Below full fold the whole mesh and all crease/cut lines are visible — the flat pattern must
+ * show the molecules, not a 4-petal pinwheel. Camera near/far tightened to model scale for
+ * depth precision.
  */
 const COLOR_FACE = 0xec008b;
 const COLOR_MOUNTAIN = 0xff3b30;
@@ -29,6 +33,7 @@ const COLOR_BOUNDARY = 0x888888;
 const COLOR_CUT = 0x000000;
 
 const STEPS_PER_FRAME = 40;
+const GUIDED_STEPS_PER_FRAME = 80;
 /** Guided mode: per-frame easing of the applied fold toward the slider target. */
 const FOLD_EASE = 0.05;
 /** Free mode: gentler per-step easing toward the target. */
@@ -50,8 +55,16 @@ export class SimCanvas {
   private readonly group = new THREE.Group();
 
   private fold: FoldScene | null = null;
-  private gpu: GpuFoldSolver | null = null;
   private cpu: FoldSolver | null = null;
+  /** Uniform-pyramid preset (7N mesh topology): eligible for shell display at full fold. */
+  private shellCapable = false;
+  /** Currently drawing only the N lateral shell faces (true only at full fold). */
+  private shellDisplayed = false;
+  private faceMat: THREE.MeshStandardMaterial | null = null;
+  /** Molecule layer (pyramid presets only): depth-biased behind the lateral shell. */
+  private molMesh: THREE.Mesh | null = null;
+  private molGeo: THREE.BufferGeometry | null = null;
+  private creaseLines: THREE.LineSegments[] = [];
   private geo: THREE.BufferGeometry | null = null;
   private posAttr: THREE.BufferAttribute | null = null;
   private foldPercent = 0;
@@ -117,32 +130,56 @@ export class SimCanvas {
     this.posAttr = new THREE.BufferAttribute(model.position, 3);
     this.posAttr.setUsage(THREE.DynamicDrawUsage);
 
+    this.shellCapable = isUniformPyramidShell(net);
+    this.shellDisplayed = false;
+    // Pyramid presets split into lateral shell + molecule layers (shared position buffer) so the
+    // molecules can carry a deeper depth bias; other meshes draw as one layer.
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", this.posAttr);
-    geo.setIndex(net.faces.flat());
+    geo.setIndex(this.shellCapable ? lateralFaceIndices(net) : net.faces.flat());
     geo.computeVertexNormals();
     this.geo = geo;
 
-    const faceMat = new THREE.MeshStandardMaterial({
+    this.faceMat = new THREE.MeshStandardMaterial({
       color: COLOR_FACE,
       side: THREE.DoubleSide,
       flatShading: true,
       metalness: 0.0,
       roughness: 0.75,
-      // Push faces slightly back in depth so the crease/cut lines (which share the same vertex
-      // buffer, hence the same depth) sit cleanly on top instead of z-fighting and overlapping.
       polygonOffset: true,
       polygonOffsetFactor: 1,
       polygonOffsetUnits: 1,
     });
-    this.group.add(new THREE.Mesh(geo, faceMat));
+    this.group.add(new THREE.Mesh(geo, this.faceMat));
 
-    // crease/cut lines coloured by assignment (facets hidden); all share the live position buffer
-    const byKind: Record<string, number[]> = { M: [], V: [], B: [], C: [] };
-    for (const e of net.edges) {
-      if (e.assignment === "F") continue;
-      byKind[e.assignment]?.push(e.a, e.b);
+    this.molMesh = null;
+    this.molGeo = null;
+    if (this.shellCapable) {
+      // Molecules tuck flush against the lateral faces near full fold; the deeper polygon offset
+      // pushes them behind in the depth buffer so the coincident surfaces never z-fight.
+      const molGeo = new THREE.BufferGeometry();
+      molGeo.setAttribute("position", this.posAttr);
+      molGeo.setIndex(moleculeFaceIndices(net));
+      molGeo.computeVertexNormals();
+      this.molGeo = molGeo;
+      const molMat = new THREE.MeshStandardMaterial({
+        color: COLOR_FACE,
+        side: THREE.DoubleSide,
+        flatShading: true,
+        metalness: 0.0,
+        roughness: 0.75,
+        polygonOffset: true,
+        polygonOffsetFactor: 3,
+        polygonOffsetUnits: 3,
+      });
+      this.molMesh = new THREE.Mesh(molGeo, molMat);
+      this.group.add(this.molMesh);
     }
+
+    // Crease/cut lines coloured by assignment (facets hidden); all share the live position
+    // buffer. Shell presets hide them only at full fold (syncShellDisplay), where the molecule
+    // creases and duplicate apex tips converge and z-fight as visual clutter.
+    const byKind = creaseIndices(net);
     const colors: Record<string, number> = {
       M: COLOR_MOUNTAIN,
       V: COLOR_VALLEY,
@@ -150,21 +187,23 @@ export class SimCanvas {
       C: COLOR_CUT,
     };
     const widths: Record<string, number> = { M: 1, V: 1, B: 1, C: 2 };
+    this.creaseLines = [];
     for (const kind of ["B", "M", "V", "C"]) {
       const idx = byKind[kind];
       if (!idx || idx.length === 0) continue;
       const lg = new THREE.BufferGeometry();
       lg.setAttribute("position", this.posAttr);
       lg.setIndex(idx);
-      this.group.add(
-        new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: colors[kind], linewidth: widths[kind] })),
+      const line = new THREE.LineSegments(
+        lg,
+        new THREE.LineBasicMaterial({ color: colors[kind], linewidth: widths[kind] }),
       );
+      this.creaseLines.push(line);
+      this.group.add(line);
     }
 
-    // Guided pyramid → GPU (Gershenfeld GPGPU); free fold → CPU. Settling is applied at the target
-    // (advance): the GPU global quench via gpu.relax(), the CPU via kineticDamp.
-    this.gpu = this.guided ? GpuFoldSolver.create(model, this.renderer) : null;
-    this.cpu = this.gpu ? null : scene.solver;
+    // CPU reference solver for all modes (guided AKDE presets are verified on this path).
+    this.cpu = scene.solver;
 
     // Frame the model AND tighten the depth range to its scale — a near/far ratio of ~250:1 instead
     // of 40000:1 gives the depth buffer the precision to stop coincident folded faces z-fighting.
@@ -180,7 +219,20 @@ export class SimCanvas {
 
   /** Active solver backend, for status display. */
   backend(): "gpu" | "cpu" | "none" {
-    return this.gpu ? "gpu" : this.cpu ? "cpu" : "none";
+    return this.cpu ? "cpu" : "none";
+  }
+
+  /**
+   * Fast-forward a guided fold to the current slider target. The modal opens at 100%; without
+   * this burst the mesh eases in over many frames and can look flat / overlapped on arrival.
+   */
+  warmToTarget(): void {
+    if (!this.fold || !this.guided || !this.cpu || this.targetFold < FOLD_REACHED_EPS) return;
+    this.cpu.solve(16000, this.targetFold);
+    this.foldPercent = this.targetFold;
+    this.syncShellDisplay();
+    this.flushGeometry();
+    this.prevPos = this.fold.model.position.slice();
   }
 
   setFoldPercent(p: number): void {
@@ -189,7 +241,6 @@ export class SimCanvas {
     this.settledFrames = 0;
     this.framesAtTarget = 0;
     this.prevKE = Infinity;
-    this.gpu?.resetSettle();
     this.prevPos = this.fold?.model.position.slice() ?? null; // restart the settle test from here
   }
 
@@ -232,14 +283,9 @@ export class SimCanvas {
       this.foldPercent += (this.targetFold - this.foldPercent) * FOLD_EASE;
       if (Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS) this.foldPercent = this.targetFold;
       const atTarget = this.foldPercent === this.targetFold;
-      if (this.gpu) {
-        this.gpu.foldPercent = this.foldPercent;
-        this.gpu.step(STEPS_PER_FRAME);
-        this.gpu.readInto(m);
-        if (atTarget) this.gpu.relax(); // GPU global quench → still rest
-      } else if (this.cpu) {
+      if (this.cpu) {
         this.cpu.foldPercent = this.foldPercent;
-        for (let i = 0; i < STEPS_PER_FRAME; i++) {
+        for (let i = 0; i < GUIDED_STEPS_PER_FRAME; i++) {
           this.cpu.step();
           if (atTarget) this.prevKE = kineticDamp(m, this.prevKE);
         }
@@ -298,8 +344,31 @@ export class SimCanvas {
   }
 
   private flushGeometry(): void {
+    this.syncShellDisplay();
     if (this.posAttr) this.posAttr.needsUpdate = true;
     this.geo?.computeVertexNormals();
+    if (this.molMesh?.visible) this.molGeo?.computeVertexNormals();
+  }
+
+  /**
+   * Swap between the full-mesh and shell display for uniform-pyramid presets. Below full fold
+   * the whole mesh (molecule layer included) and all crease lines are drawn; at full fold the
+   * molecule layer and crease lines hide and the duplicate apex tips snap to one point, leaving
+   * only the clean N-triangle lateral shell.
+   */
+  private syncShellDisplay(): void {
+    if (!this.shellCapable || !this.fold) return;
+    const wantShell = this.foldPercent >= 1 - FOLD_REACHED_EPS;
+    if (wantShell !== this.shellDisplayed) {
+      this.shellDisplayed = wantShell;
+      if (this.molMesh) this.molMesh.visible = !wantShell;
+      if (this.faceMat) {
+        this.faceMat.side = wantShell ? THREE.FrontSide : THREE.DoubleSide;
+        this.faceMat.needsUpdate = true;
+      }
+      for (const line of this.creaseLines) line.visible = !wantShell;
+    }
+    if (wantShell) snapTipsToMean(this.fold.model.position, this.fold.net.tips);
   }
 
   private loop(): void {
@@ -314,9 +383,65 @@ export class SimCanvas {
     this.group.clear();
     this.geo?.dispose();
     this.geo = null;
+    this.molGeo?.dispose();
+    this.molGeo = null;
+    this.molMesh = null;
     this.posAttr = null;
-    this.gpu = null;
     this.cpu = null;
+    this.faceMat = null;
+    this.creaseLines = [];
+    this.shellCapable = false;
+    this.shellDisplayed = false;
+  }
+}
+
+/** AKDE uniform pyramid: N lateral tris + 6N molecule tris = 7N faces. */
+function isUniformPyramidShell(net: FoldNet): boolean {
+  const N = net.meta.N;
+  return N > 0 && net.faces.length === 7 * N;
+}
+
+/** The N lateral shell triangles (faces[7k] of each molecule group). */
+function lateralFaceIndices(net: FoldNet): number[] {
+  const out: number[] = [];
+  for (let k = 0; k < net.meta.N; k++) out.push(...net.faces[7 * k]);
+  return out;
+}
+
+/** The 6N molecule triangles (everything but the laterals). */
+function moleculeFaceIndices(net: FoldNet): number[] {
+  const out: number[] = [];
+  for (let f = 0; f < net.faces.length; f++) {
+    if (f % 7 !== 0) out.push(...net.faces[f]);
+  }
+  return out;
+}
+
+function creaseIndices(net: FoldNet): Record<string, number[]> {
+  const byKind: Record<string, number[]> = { M: [], V: [], B: [], C: [] };
+  for (const e of net.edges) {
+    if (e.assignment === "F") continue;
+    byKind[e.assignment]?.push(e.a, e.b);
+  }
+  return byKind;
+}
+
+function snapTipsToMean(pos: Float32Array, tips: number[]): void {
+  if (tips.length === 0) return;
+  let x = 0, y = 0, z = 0;
+  for (const i of tips) {
+    x += pos[3 * i];
+    y += pos[3 * i + 1];
+    z += pos[3 * i + 2];
+  }
+  const n = tips.length;
+  x /= n;
+  y /= n;
+  z /= n;
+  for (const i of tips) {
+    pos[3 * i] = x;
+    pos[3 * i + 1] = y;
+    pos[3 * i + 2] = z;
   }
 }
 

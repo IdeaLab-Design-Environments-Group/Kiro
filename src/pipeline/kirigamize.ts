@@ -38,10 +38,27 @@ import {
 } from "./types.js";
 
 export interface KirigamizeOptions {
-  /** Seam-visibility weight λ (cost plumbing; vis ≡ 0 in v1). */
+  /**
+   * Seam-visibility weight λ. w(e) = len(e) + λ·vis(e), vis(e) = 1−|θ_e|/π.
+   * λ=0 (default): length-only routing. λ>0: cuts prefer high-dihedral edges.
+   */
   lambda: number;
-  /** Cut every defect vertex ("dart") or tuck the positive ones ("tuck-all"). */
-  strategy: "dart" | "tuck-all";
+  /**
+   * "dart"    — cut all δ>0 vertices.
+   * "tuck-all"— tuck all δ>0 vertices (Origamizer reduction).
+   * "hybrid"  — per-vertex cost comparison: dart iff path-to-boundary ≤
+   *             tuckCostScale·δ(v)·r̄(v). Closed meshes fall back to dart.
+   */
+  strategy: "dart" | "tuck-all" | "hybrid";
+  /** Scale for tuck cost in hybrid mode (default 1). */
+  tuckCostScale: number;
+  /**
+   * Drop degree-1 dart leaves with δ < leafPruneDeltaMax from the cut forest,
+   * promoting them to tucks. Default false.
+   */
+  leafPruning: boolean;
+  /** Max δ (rad) for leaf pruning. Default π/4 ≈ 45°. */
+  leafPruneDeltaMax: number;
   /** ε as a fraction of Q's bbox diagonal. */
   epsilonRel: number;
   /** Run the simulator verification (M5). */
@@ -53,6 +70,9 @@ export interface KirigamizeOptions {
 export const DEFAULT_KIRIGAMIZE: KirigamizeOptions = {
   lambda: 0,
   strategy: "dart",
+  tuckCostScale: 1.0,
+  leafPruning: false,
+  leafPruneDeltaMax: Math.PI / 4,
   epsilonRel: DEFAULT_VERIFY.epsilonRel,
   verify: true,
   iterations: DEFAULT_VERIFY.iterations,
@@ -84,6 +104,9 @@ export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> =
     const plan = planCuts(mesh, topo, defects, {
       lambda: opts.lambda,
       strategy: opts.strategy,
+      tuckCostScale: opts.tuckCostScale,
+      leafPruning: opts.leafPruning,
+      leafPruneDeltaMax: opts.leafPruneDeltaMax,
       extraTerminals,
     });
     const tuckSet = plan.perVertexAction

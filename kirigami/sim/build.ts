@@ -39,8 +39,18 @@ export function setupGuidedFold(model: BarHingeModel, net: FoldNet): void {
     model.goal[3 * i + 1] = gy;
     model.goal[3 * i + 2] = gz;
   };
-  // apex tips converge to the apex point (0, 0, H)
-  for (const t of net.tips) drive(t, 0, 0, net.meta.H);
+  // Lift the entire major-cut hole rim — every inner-ring vertex (flat radius ≲ rApex) — to
+  // height H, preserving its flat shape. The apex stays an OPEN hole (a ring) instead of welding
+  // to a single point, so each valley inner node lands on the rim (the major-cut midpoint) rather
+  // than collapsing onto the apex. (DETC: material is removed around the apex ⇒ it is a hole, not a
+  // point.) Lifting the whole rim rigidly keeps the frustum near-isometric; welding only the tips
+  // while the inner corners stayed free distorted the faces.
+  const innerRimR = net.meta.rApex * 1.4;
+  for (let i = 0; i < net.vertices.length; i++) {
+    if (Math.hypot(net.vertices[i].x, net.vertices[i].y) <= innerRimR) {
+      drive(i, net.vertices[i].x, net.vertices[i].y, net.meta.H);
+    }
+  }
   // each molecule's outer-corner pair merges into one cone base vertex at radius R
   for (const [a, b] of net.basePairs) {
     const angA = Math.atan2(net.vertices[a].y, net.vertices[a].x);

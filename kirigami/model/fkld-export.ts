@@ -22,8 +22,8 @@
 
 import type { KirigamiState } from "./types.js";
 import { buildFoldNet } from "../sim/foldnet.js";
-import { foldNetToFkld, type FkldFile } from "../../fkld/bridge.coffee";
-import { serializeFkld } from "../../fkld/io.coffee";
+import { foldNetToFkld, type FkldFile } from "./fkld-bridge.js";
+import { serializeFkld } from "@dayangac/fkld";
 
 /** A downloadable FKLD payload — filename + serialized JSON text. */
 export interface FkldDownload {

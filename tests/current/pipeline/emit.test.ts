@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFkld, serializeFkld } from "@fkld/io.coffee";
-import { KEYS } from "@fkld/spec.coffee";
+import { KEYS, parseFkld, serializeFkld } from "@dayangac/fkld";
 import { angleDefects } from "../../../src/pipeline/curvature.js";
 import { DRIVEN_KEY, emitFkld } from "../../../src/pipeline/emit.js";
 import { buildTopology } from "../../../src/pipeline/mesh.js";

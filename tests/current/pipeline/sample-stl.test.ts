@@ -33,4 +33,24 @@ describe("sample STL files fold through the pipeline", () => {
     ).toBe(true);
     expect(f.dHRel).toBeLessThanOrEqual(0.05);
   });
+
+  it("sample-octahedron.stl verifies (sim as oracle)", E2E, () => {
+    const r = kirigamizeText(loadStl("sample-octahedron.stl"), "stl", { verify: true }).report!;
+    const f = r.foldFromFlat;
+    expect(
+      r.converged,
+      `foldFromFlat dH=${f.dH.toFixed(3)} ε=${r.epsilon.toFixed(3)} strain=${f.meanStrain} · equilibrium dH=${r.equilibrium.dH.toFixed(3)}`,
+    ).toBe(true);
+    expect(f.dHRel).toBeLessThanOrEqual(0.05);
+  });
+
+  it("sample-hex-pyramid.stl verifies (sim as oracle)", E2E, () => {
+    const r = kirigamizeText(loadStl("sample-hex-pyramid.stl"), "stl", { verify: true }).report!;
+    const f = r.foldFromFlat;
+    expect(
+      r.converged,
+      `foldFromFlat dH=${f.dH.toFixed(3)} ε=${r.epsilon.toFixed(3)} strain=${f.meanStrain} · equilibrium dH=${r.equilibrium.dH.toFixed(3)}`,
+    ).toBe(true);
+    expect(f.dHRel).toBeLessThanOrEqual(0.05);
+  });
 });

@@ -151,3 +151,165 @@ describe("planCuts — single isolated terminal on a closed mesh", () => {
     expect(cutDegree(topo, plan.cutEdges, 3)).toBe(1);
   });
 });
+
+describe("planCuts — vis(e) seam-visibility routing (λ > 0)", () => {
+  it("cost.visibility is 0 at lambda=0 regardless of shape", () => {
+    const pyr = makePyramid(4, 50, 30);
+    const topo = buildTopology(pyr);
+    const defects = angleDefects(pyr, topo);
+    const plan = planCuts(pyr, topo, defects, { lambda: 0, strategy: "dart" });
+    expect(plan.cost.visibility).toBe(0);
+  });
+
+  it("cost.visibility is positive at lambda>0 on a non-flat mesh", () => {
+    const pyr = makePyramid(4, 50, 30);
+    const topo = buildTopology(pyr);
+    const defects = angleDefects(pyr, topo);
+    const plan = planCuts(pyr, topo, defects, { lambda: 1, strategy: "dart" });
+    expect(plan.cost.visibility).toBeGreaterThan(0);
+  });
+
+  it("cost.length is the same as lambda=0 when all edges have equal dihedral", () => {
+    // A flat grid has zero dihedral everywhere → vis(e) = 1 for all e, so
+    // the routing is len(e) + λ·1 = len(e) + λ. The MST topology is the
+    // same as λ=0 (ties broken identically). But on a flat grid there are no
+    // defect vertices, so the plan is empty regardless.
+    const grid = makeGrid();
+    const topo = buildTopology(grid);
+    const defects = angleDefects(grid, topo);
+    const p0 = planCuts(grid, topo, defects, { lambda: 0, strategy: "dart" });
+    const p1 = planCuts(grid, topo, defects, { lambda: 5, strategy: "dart" });
+    expect(p0.cutEdges).toEqual([]);
+    expect(p1.cutEdges).toEqual([]);
+  });
+
+  it("cost.lambda records the weight used", () => {
+    const pyr = makePyramid(4, 50, 30);
+    const topo = buildTopology(pyr);
+    const defects = angleDefects(pyr, topo);
+    const plan = planCuts(pyr, topo, defects, { lambda: 2.5, strategy: "dart" });
+    expect(plan.cost.lambda).toBe(2.5);
+  });
+});
+
+describe("planCuts — hybrid dart-vs-tuck strategy", () => {
+  it("nearly-flat apex: high tuckCostScale → dart (cheap path beats high tuck cost)", () => {
+    // A very shallow pyramid: apex δ ≈ 0.009 rad, nearest-boundary path = 1 edge.
+    // With large tuckCostScale the tuck cost (scale·δ·r̄) greatly exceeds the
+    // single-edge dart path → hybrid chooses dart.
+    const pyr = makePyramid(4, 50, 1);
+    const topo = buildTopology(pyr);
+    const defects = angleDefects(pyr, topo);
+    const plan = planCuts(pyr, topo, defects, {
+      lambda: 0,
+      strategy: "hybrid",
+      tuckCostScale: 1000,
+    });
+    expect(plan.perVertexAction[0]).toBe("dart");
+    expect(plan.cutEdges.length).toBeGreaterThan(0);
+  });
+
+  it("nearly-flat apex: tiny tuckCostScale → tuck (molecule is cheaper than the cut path)", () => {
+    // Same pyramid: with tuckCostScale ≈ 0 the tuck cost → 0, which is always
+    // less than the dart path → hybrid chooses tuck.
+    const pyr = makePyramid(4, 50, 1);
+    const topo = buildTopology(pyr);
+    const defects = angleDefects(pyr, topo);
+    const plan = planCuts(pyr, topo, defects, {
+      lambda: 0,
+      strategy: "hybrid",
+      tuckCostScale: 0.0001,
+    });
+    expect(plan.perVertexAction[0]).toBe("tuck");
+    expect(plan.cutEdges).toEqual([]); // apex is the only terminal; tucked → no cut
+  });
+
+  it("saddle vertex is always slit regardless of hybrid tuck cost", () => {
+    const saddle = makeSaddleFan();
+    const topo = buildTopology(saddle);
+    const defects = angleDefects(saddle, topo);
+    // tuckCostScale=0 would try to tuck everything, but δ<0 must be slit.
+    const plan = planCuts(saddle, topo, defects, {
+      lambda: 0,
+      strategy: "hybrid",
+      tuckCostScale: 0,
+    });
+    expect(plan.perVertexAction[0]).toBe("slit");
+    expect(plan.cutEdges.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("hybrid with tuckCostScale=∞ behaves like dart (always dart)", () => {
+    const octa = makeOctahedron();
+    const topo = buildTopology(octa);
+    const defects = angleDefects(octa, topo);
+    const planDart = planCuts(octa, topo, defects, { lambda: 0, strategy: "dart" });
+    const planHybrid = planCuts(octa, topo, defects, {
+      lambda: 0,
+      strategy: "hybrid",
+      tuckCostScale: Infinity,
+    });
+    // On a closed mesh dart cost = Infinity → hybrid falls back to dart for all.
+    expect(planHybrid.perVertexAction).toEqual(planDart.perVertexAction);
+  });
+});
+
+describe("planCuts — leaf pruning", () => {
+  it("leafPruning=false (default) keeps all dart leaves intact", () => {
+    const pyr = makePyramid(4, 50, 1); // nearly-flat apex, δ ≈ 0.009 rad
+    const topo = buildTopology(pyr);
+    const defects = angleDefects(pyr, topo);
+    const plan = planCuts(pyr, topo, defects, {
+      lambda: 0,
+      strategy: "dart",
+      leafPruning: false,
+    });
+    expect(plan.perVertexAction[0]).toBe("dart");
+    expect(plan.cutEdges.length).toBe(1);
+  });
+
+  it("leafPruning=true demotes a small-δ degree-1 dart to tuck and removes its branch", () => {
+    // The apex of a nearly-flat pyramid has δ ≈ 0.009 rad, which is well below
+    // the default leafPruneDeltaMax = π/4 ≈ 0.785. After MST the apex is a
+    // degree-1 leaf — it should be promoted to tuck and the cut edge dropped.
+    const pyr = makePyramid(4, 50, 1);
+    const topo = buildTopology(pyr);
+    const defects = angleDefects(pyr, topo);
+    const plan = planCuts(pyr, topo, defects, {
+      lambda: 0,
+      strategy: "dart",
+      leafPruning: true,
+    });
+    expect(plan.perVertexAction[0]).toBe("tuck"); // demoted
+    expect(plan.cutEdges).toEqual([]); // leaf branch removed
+  });
+
+  it("leafPruning=true does not prune a large-δ leaf (δ > leafPruneDeltaMax)", () => {
+    // The cube's corners have δ = π/2 ≈ 1.57 rad > π/4 — they should NOT be pruned.
+    const cube = makeCube();
+    const topo = buildTopology(cube);
+    const defects = angleDefects(cube, topo);
+    const plan = planCuts(cube, topo, defects, {
+      lambda: 0,
+      strategy: "dart",
+      leafPruning: true,
+      leafPruneDeltaMax: Math.PI / 4, // 45° — cube corners are 90° → not pruned
+    });
+    // All 8 corners should remain dart; leaf pruning leaves cube unchanged.
+    for (let v = 0; v < 8; v++) expect(plan.perVertexAction[v]).toBe("dart");
+    expect(plan.cutEdges.length).toBe(7);
+  });
+
+  it("leafPruning=true never prunes slit (δ<0) vertices", () => {
+    const saddle = makeSaddleFan();
+    const topo = buildTopology(saddle);
+    const defects = angleDefects(saddle, topo);
+    const plan = planCuts(saddle, topo, defects, {
+      lambda: 0,
+      strategy: "dart",
+      leafPruning: true,
+      leafPruneDeltaMax: Math.PI * 2, // would prune anything — but slits are exempt
+    });
+    expect(plan.perVertexAction[0]).toBe("slit"); // must NOT be demoted to tuck
+    expect(plan.cutEdges.length).toBeGreaterThanOrEqual(1);
+  });
+});

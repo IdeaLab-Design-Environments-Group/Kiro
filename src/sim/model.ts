@@ -26,8 +26,13 @@ export interface SolverParams {
   kFacet: number;
   /** Face interior-angle stiffness. Paper default 0.2. */
   kFace: number;
-  /** Damping ratio ζ ∈ [0.01, 0.5]. Paper default ~0.45. */
+  /** Damping ratio ζ (OrigamiSimulator `percentDamping`). Paper ~0.45; OS default 0.85. */
   zeta: number;
+  /**
+   * Beam viscous damping scale. OrigamiSimulator uploads `beam.getD() * 0.5` to the GPU
+   * (`dynamicSolver.js`); set to 0.5 on the plain-FOLD path to match.
+   */
+  beamDampingScale: number;
   /**
    * Design fold-angle magnitude (rad) for the **mountain** polygon↔molecule slants.
    * v1 empirical default; exact per-crease angles need the DETC closure solve (Eqs 1–2).
@@ -50,6 +55,7 @@ export const DEFAULT_PARAMS: SolverParams = {
   // integrator can settle into cleaner or more-crumpled states; ζ≈1 reliably damps the chaotic
   // buckling without the explicit-damping instability that appears past ζ≈1.5.
   zeta: 1.0,
+  beamDampingScale: 1.0,
   foldMountain: 1.2,
   foldValley: 2.9,
 };

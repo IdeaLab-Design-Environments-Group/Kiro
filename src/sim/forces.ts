@@ -113,7 +113,7 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
     F[3 * b + 1] -= f * d.y;
     F[3 * b + 2] -= f * d.z;
     // viscous damping between neighbours: c·(v_neighbor − v), c = 2ζ√(k·m_min)
-    const c = 2 * zeta * Math.sqrt(k * Math.min(m.mass[a], m.mass[b]));
+    const c = 2 * zeta * m.params.beamDampingScale * Math.sqrt(k * Math.min(m.mass[a], m.mass[b]));
     const va = get(vel, a);
     const vb = get(vel, b);
     F[3 * a] += c * (vb.x - va.x);

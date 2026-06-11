@@ -12,14 +12,12 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@kirigami/*": ["kirigami/*"],
-      "@fkld/*": ["fkld/*"]
+      "@kirigami/*": ["kirigami/*"]
     }
   },
   "include": [
     "src/**/*",
     "kirigami/**/*",
-    "fkld/**/*",
     "scripts/**/*",
     "tests/**/*",
     "vite.config.ts",

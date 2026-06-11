@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildSceneFromFold, isFoldable } from "../../../src/sim/fold-adapter.js";
 
+// Two explicit triangle faces sharing one mountain crease (edge 0-2). (A quad face WITH an
+// explicit interior diagonal is degenerate — the OS-faithful triangulator adds a second
+// coincident diagonal — so the canonical form is pre-triangulated, as here.)
 const foldable = {
   vertices_coords: [
     [0, 0, 0],
@@ -8,7 +11,10 @@ const foldable = {
     [1, 1, 0],
     [0, 1, 0],
   ],
-  faces_vertices: [[0, 1, 2, 3]],
+  faces_vertices: [
+    [0, 1, 2],
+    [0, 2, 3],
+  ],
   edges_vertices: [
     [0, 1],
     [1, 2],
@@ -30,19 +36,19 @@ describe("sim/fold-adapter", () => {
     const { net, model, solver } = buildSceneFromFold(foldable);
 
     expect(net.faces).toHaveLength(2);
-    expect(model.creases.count).toBe(1);
+    expect(model.creases.count).toBe(1); // only the M edge (0,2) is a crease
     // Paper-exact path (Ghassaei et al. §2.3): the file's angle passes through
     // unclamped — 180° stays π, signed per the FOLD spec.
     expect(Math.abs(model.creases.targetTheta[0])).toBeCloseTo(Math.PI, 6);
     expect(solver.theta.length).toBe(1);
   });
 
-  it("FKLD files (kirigami sim) still clamp explicit fold angles to ±2.7", () => {
+  it("explicit FKLD fold angles are NOT clamped (uniform engine; the ±2.7 FKLD clamp is retired)", () => {
     const { model } = buildSceneFromFold({
       ...foldable,
       "fkld:edges_cutType": [null, null, null, null, null],
     });
-    expect(Math.abs(model.creases.targetTheta[0])).toBeCloseTo(2.7, 6);
+    expect(Math.abs(model.creases.targetTheta[0])).toBeCloseTo(Math.PI, 6);
   });
 
   it("uses guided FKLD frames when folded-form and driven metadata are present", () => {

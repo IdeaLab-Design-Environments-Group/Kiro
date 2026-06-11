@@ -54,7 +54,7 @@ vi.mock("../../../src/pipeline/verify.js", () => ({
 import { kirigamize, kirigamizeText } from "../../../src/pipeline/kirigamize.js";
 
 const mesh = {
-  vertices: [{ x: 0, y: 0, z: 0 }],
+  vertices: Array.from({ length: 50 }, (_, i) => ({ x: i, y: i * 2, z: i * 3 })),
   faces: [[0, 0, 0]],
 };
 
@@ -87,7 +87,7 @@ function makeUnfold(sourceVertex: number) {
     patchOfFace: [],
     patchCount: 1,
     origVertex: [sourceVertex],
-    goalPos: [{ x: 1, y: 2, z: 3 }],
+    goalPos: Array.from({ length: 50 }, (_, i) => ({ x: i + 0.5, y: i * 2 + 0.5, z: i * 3 + 0.5 })),
     lips: [],
     vents: [{
       sourceVertex,
@@ -176,7 +176,7 @@ describe("pipeline/kirigamize", () => {
     expect(mocks.verifyFold.mock.calls[0]![2]).toMatchObject({
       epsilonRel: 0.05,
       iterations: 12,
-      vents: [{ sourceVertex: 3, radiusMm: expect.any(Number) }],
+      vents: [{ center: mesh.vertices[3], radiusMm: expect.any(Number) }],
     });
     expect(result.report).toMatchObject({
       converged: true,
