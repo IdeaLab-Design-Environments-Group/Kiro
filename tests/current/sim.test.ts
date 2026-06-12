@@ -53,18 +53,22 @@ describe("FoldNet topology", () => {
     // excess material instead of stretching it: mean bar strain stays small (the kirigami premise).
     const { model, solver } = buildFoldScene(STATE);
     solver.solve(16000, 1);
-    let s = 0;
+    // Mean bar strain over bars NOT between two driven nodes: the major-cut rim and base-pair
+    // merges close by design (driven, fixed nodes) and must not be counted as material stretch.
+    let s = 0, nFree = 0;
     for (let i = 0; i < model.beams.count; i++) {
       const a = model.beams.n0[i];
       const b = model.beams.n1[i];
+      if (model.driven[a] && model.driven[b]) continue;
       const l = Math.hypot(
         model.position[3 * a] - model.position[3 * b],
         model.position[3 * a + 1] - model.position[3 * b + 1],
         model.position[3 * a + 2] - model.position[3 * b + 2],
       );
       s += Math.abs(l / model.beams.rest[i] - 1);
+      nFree++;
     }
-    expect(s / model.beams.count).toBeLessThan(0.1);
+    expect(s / Math.max(1, nFree)).toBeLessThan(0.1);
   });
 });
 
@@ -135,7 +139,7 @@ describe("crease force (Gershenfeld §2.3–2.6) — single hinge", () => {
 });
 
 describe("full-net forward fold (DETC forward process → goal mesh)", () => {
-  it("folds the flat net crisply into the designed pyramid: apex hole stays open (rim at rApex), height = H, low strain", { timeout: 15000 }, () => {
+  it("folds the flat net crisply into the designed pyramid: major cut closes to a small apex hole, low strain", { timeout: 15000 }, () => {
     const { net, model, solver } = buildFoldScene(STATE);
     solver.solve(16000, 1);
 
@@ -148,28 +152,33 @@ describe("full-net forward fold (DETC forward process → goal mesh)", () => {
     const meanR = (ids: number[]) =>
       ids.reduce((a, i) => a + Math.hypot(model.position[3 * i], model.position[3 * i + 1]), 0) / ids.length;
 
-    // apex tips lift to the major-cut rim at radius rApex — the apex hole stays OPEN (kirigami:
-    // material is removed around the apex), rather than welding to a single point. Base spreads to R.
-    expect(meanR(net.tips)).toBeCloseTo(net.meta.rApex, 1);
+    // The major cut CLOSES as the fold ramps: the inner rim is pulled in from its flat radius
+    // (rApex) to a small ring of radius `smallR` near the apex, so the folded apex hole is small
+    // regardless of the flat size. Base spreads to R.
+    const smallR = Math.max(net.meta.rApex * Math.sin(net.meta.theta / 2), 0.025 * net.meta.R);
+    expect(meanR(net.tips)).toBeCloseTo(smallR, 1);
     expect(meanR(net.base)).toBeCloseTo(net.meta.R, 1);
 
-    // cone height = the designed apex altitude H (normalized as net.meta.H = STATE.H · scale)
-    const height = Math.abs(meanZ(net.base) - meanZ(net.tips));
-    expect(height).toBeCloseTo(net.meta.H, 1);
+    // base sits at z ≈ 0; the closed rim sits just below the full apex H, at H·(1−smallR/s).
+    expect(meanZ(net.base)).toBeCloseTo(0, 1);
+    expect(meanZ(net.tips)).toBeCloseTo(net.meta.H * (1 - smallR / net.meta.s), 1);
 
-    // near-isometric: the molecules tuck via their cuts, so mean bar strain is small
-    let strain = 0;
+    // near-isometric: the molecules tuck via their cuts, so mean bar strain over the FREE bars
+    // (excluding the driven major-cut rim + base-pair merges, which close by design) is small.
+    let strain = 0, nFree = 0;
     for (let i = 0; i < model.beams.count; i++) {
       const a = model.beams.n0[i];
       const b = model.beams.n1[i];
+      if (model.driven[a] && model.driven[b]) continue;
       const l = Math.hypot(
         model.position[3 * a] - model.position[3 * b],
         model.position[3 * a + 1] - model.position[3 * b + 1],
         model.position[3 * a + 2] - model.position[3 * b + 2],
       );
       strain += Math.abs(l / model.beams.rest[i] - 1);
+      nFree++;
     }
-    strain /= model.beams.count;
+    strain /= Math.max(1, nFree);
     expect(strain).toBeLessThan(0.1);
 
     // molecules tuck INSIDE the pyramid (no FREE node protrudes beyond the cone surface

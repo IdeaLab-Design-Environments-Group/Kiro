@@ -39,16 +39,21 @@ export function setupGuidedFold(model: BarHingeModel, net: FoldNet): void {
     model.goal[3 * i + 1] = gy;
     model.goal[3 * i + 2] = gz;
   };
-  // Lift the entire major-cut hole rim — every inner-ring vertex (flat radius ≲ rApex) — to
-  // height H, preserving its flat shape. The apex stays an OPEN hole (a ring) instead of welding
-  // to a single point, so each valley inner node lands on the rim (the major-cut midpoint) rather
-  // than collapsing onto the apex. (DETC: material is removed around the apex ⇒ it is a hole, not a
-  // point.) Lifting the whole rim rigidly keeps the frustum near-isometric; welding only the tips
-  // while the inner corners stayed free distorted the faces.
+  // Close the major cut as the fold ramps: drive every inner-ring vertex (flat radius ≲ rApex) to a
+  // SMALL ring at the apex. Because driven nodes move rest→goal by foldPercent, the rim interpolates
+  // from its flat radius (rApex) down to `smallR` as the fold goes 0→1, so the apex hole shrinks
+  // during folding and ends small — regardless of the flat hole size. Angular position is preserved
+  // so the rim stays a clean ring. Pulling in below the isometric radius stretches the lateral-face
+  // beams (the cut "closing"), but those run between driven/fixed nodes, so the faces stay flat
+  // triangles and the visible mesh is a clean pyramid with a tiny apex hole.
   const innerRimR = net.meta.rApex * 1.4;
+  const { R, s, H } = net.meta;
+  const smallR = Math.max(net.meta.rApex * Math.sin(net.meta.theta / 2), 0.025 * R);
+  const apexZ = H * (1 - smallR / s);
   for (let i = 0; i < net.vertices.length; i++) {
-    if (Math.hypot(net.vertices[i].x, net.vertices[i].y) <= innerRimR) {
-      drive(i, net.vertices[i].x, net.vertices[i].y, net.meta.H);
+    const rho = Math.hypot(net.vertices[i].x, net.vertices[i].y);
+    if (rho <= innerRimR && rho > 1e-9) {
+      drive(i, (net.vertices[i].x / rho) * smallR, (net.vertices[i].y / rho) * smallR, apexZ);
     }
   }
   // each molecule's outer-corner pair merges into one cone base vertex at radius R
