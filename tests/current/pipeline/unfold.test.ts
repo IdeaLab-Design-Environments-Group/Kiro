@@ -200,3 +200,42 @@ describe("seamedUnfold (relief loop)", () => {
     expect(result.totalCutLength).toBeGreaterThanOrEqual(plan.cost.length - 1e-9);
   });
 });
+
+describe("seamedUnfold (relief pruning)", () => {
+  it("icosphere(1): pruning drops redundant relief cuts, development stays valid", { timeout: 120000 }, () => {
+    const sphere = makeIcosphere(1);
+    const { topo, defects, plan } = planFor(sphere);
+    const base = seamedUnfold(sphere, topo, plan, defects, { pruneRelief: false });
+    const pruned = seamedUnfold(sphere, topo, plan, defects, { pruneRelief: true });
+
+    // The unpruned run must add relief (otherwise there's nothing to prune).
+    expect(base.reliefEdges.length).toBeGreaterThan(0);
+    expect(base.reliefPruned).toBe(0);
+
+    // Pruning actually removes some, and reports the count.
+    expect(pruned.reliefPruned).toBeGreaterThan(0);
+    expect(pruned.reliefEdges.length).toBeLessThan(base.reliefEdges.length);
+    expect(pruned.totalCutLength).toBeLessThanOrEqual(base.totalCutLength + 1e-9);
+
+    // Pruned set is still one overlap-free sheet.
+    expect(pruned.patchCount).toBe(1);
+    expect(findSelfOverlap(pruned.flat, pruned.faces)).toBeNull();
+
+    // Pruning only ever REMOVES — kept relief ⊆ the unpruned relief set …
+    const baseRelief = new Set(base.reliefEdges);
+    for (const e of pruned.reliefEdges) expect(baseRelief.has(e)).toBe(true);
+    // … and never touches a planned curvature cut.
+    const keptCuts = new Set([...plan.cutEdges, ...pruned.reliefEdges]);
+    for (const e of plan.cutEdges) expect(keptCuts.has(e)).toBe(true);
+  });
+
+  it("cube: nothing to prune (no relief), pruneRelief is a no-op", () => {
+    const cube = makeCube();
+    const { topo, defects, plan } = planFor(cube);
+    const result = seamedUnfold(cube, topo, plan, defects, { pruneRelief: true });
+    expect(result.reliefEdges.length).toBe(0);
+    expect(result.reliefPruned).toBe(0);
+    expect(result.patchCount).toBe(1);
+    expect(findSelfOverlap(result.flat, result.faces)).toBeNull();
+  });
+});

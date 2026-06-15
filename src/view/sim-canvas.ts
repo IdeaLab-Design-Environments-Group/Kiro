@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { FoldNet, FoldScene, FoldSolver } from "../sim/index.js";
+import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
 
 /**
@@ -31,6 +31,14 @@ const COLOR_MOUNTAIN = 0xff3b30;
 const COLOR_VALLEY = 0x1f6feb;
 const COLOR_BOUNDARY = 0x888888;
 const COLOR_CUT = 0x000000;
+// 3D-printed mode: rigid plastic tiles, the fabric backing behind them, and the fabric-hinge lines.
+const COLOR_TILE = 0xdfe3e8;
+const COLOR_CLOTH = 0x5a5048;
+const COLOR_HINGE = 0xb08d57;
+/** Printed tile thickness as a fraction of the model's bbox diagonal (visual; physics is ratio-based). */
+const TILE_THICK_FRAC = 0.018;
+/** Each rigid tile is shrunk this fraction toward its centroid, exposing the bare-cloth hinge strips. */
+const TILE_INSET_FRAC = 0.16;
 
 const STEPS_PER_FRAME = 40;
 const GUIDED_STEPS_PER_FRAME = 80;
@@ -67,8 +75,18 @@ export class SimCanvas {
   private creaseLines: THREE.LineSegments[] = [];
   private geo: THREE.BufferGeometry | null = null;
   private posAttr: THREE.BufferAttribute | null = null;
+  // 3D-printed thick-tile layer (rebuilt each frame from the live folded positions).
+  private material: SimMaterial = "vinyl";
+  private thickGeo: THREE.BufferGeometry | null = null;
+  private thickPos: Float32Array | null = null;
+  private thickAttr: THREE.BufferAttribute | null = null;
+  private tileFaces: number[] | null = null;
+  private tileT = 0; // one-sided extrude thickness (model units)
+  private tileSign: Float32Array | null = null; // per-face ±1: extrude side, made consistent across mixed winding
   private foldPercent = 0;
-  private targetFold = 1;
+  // Open at the flat full sheet (0): the kirigamized body is first shown as the complete
+  // paper with every cut line visible, then the user drives the fold slider up to the target.
+  private targetFold = 0;
   private running = false;
   /** True when the scene drives boundary nodes to a goal mesh (AKDE pyramid). */
   private guided = false;
@@ -118,6 +136,7 @@ export class SimCanvas {
     this.disposeGeo();
     this.fold = scene;
     const { net, model } = scene;
+    this.material = scene.material ?? "vinyl";
 
     this.guided = anyDriven(model.driven);
     this.foldPercent = 0;
@@ -130,7 +149,8 @@ export class SimCanvas {
     this.posAttr = new THREE.BufferAttribute(model.position, 3);
     this.posAttr.setUsage(THREE.DynamicDrawUsage);
 
-    this.shellCapable = isUniformPyramidShell(net);
+    // Printed mode renders thick tiles, never the thin pyramid shell swap.
+    this.shellCapable = isUniformPyramidShell(net) && this.material !== "printed";
     this.shellDisplayed = false;
     // Pyramid presets split into lateral shell + molecule layers (shared position buffer) so the
     // molecules can carry a deeper depth bias; other meshes draw as one layer.
@@ -140,15 +160,17 @@ export class SimCanvas {
     geo.computeVertexNormals();
     this.geo = geo;
 
+    // Vinyl: the flat sheet itself. Printed: this flat mesh becomes the fabric BACKING that shows
+    // through the hinge gaps, with the thick rigid tiles drawn on top (buildPrintedTiles below).
     this.faceMat = new THREE.MeshStandardMaterial({
-      color: COLOR_FACE,
+      color: this.material === "printed" ? COLOR_CLOTH : COLOR_FACE,
       side: THREE.DoubleSide,
       flatShading: true,
       metalness: 0.0,
-      roughness: 0.75,
+      roughness: this.material === "printed" ? 0.95 : 0.75,
       polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
+      polygonOffsetFactor: this.material === "printed" ? 4 : 1,
+      polygonOffsetUnits: this.material === "printed" ? 4 : 1,
     });
     this.group.add(new THREE.Mesh(geo, this.faceMat));
 
@@ -180,12 +202,11 @@ export class SimCanvas {
     // buffer. Shell presets hide them only at full fold (syncShellDisplay), where the molecule
     // creases and duplicate apex tips converge and z-fight as visual clutter.
     const byKind = creaseIndices(net);
-    const colors: Record<string, number> = {
-      M: COLOR_MOUNTAIN,
-      V: COLOR_VALLEY,
-      B: COLOR_BOUNDARY,
-      C: COLOR_CUT,
-    };
+    // Printed: M/V/B fold lines are the fabric hinges (one cloth colour); cuts stay black.
+    const colors: Record<string, number> =
+      this.material === "printed"
+        ? { M: COLOR_HINGE, V: COLOR_HINGE, B: COLOR_HINGE, C: COLOR_CUT }
+        : { M: COLOR_MOUNTAIN, V: COLOR_VALLEY, B: COLOR_BOUNDARY, C: COLOR_CUT };
     const widths: Record<string, number> = { M: 1, V: 1, B: 1, C: 2 };
     this.creaseLines = [];
     for (const kind of ["B", "M", "V", "C"]) {
@@ -202,8 +223,14 @@ export class SimCanvas {
       this.group.add(line);
     }
 
+    // Printed: thick rigid tiles drawn on top of the fabric backing, rebuilt each frame.
+    if (this.material === "printed") this.buildPrintedTiles(net);
+
     // CPU reference solver for all modes (guided AKDE presets are verified on this path).
     this.cpu = scene.solver;
+    // Self-collision so folded layers don't pass through each other. Driven (guided) nodes are
+    // fixed and skipped, so prescribed shapes are unaffected; free folds get layer-vs-layer contact.
+    this.cpu.enableCollision();
 
     // Frame the model AND tighten the depth range to its scale — a near/far ratio of ~250:1 instead
     // of 40000:1 gives the depth buffer the precision to stop coincident folded faces z-fighting.
@@ -223,8 +250,9 @@ export class SimCanvas {
   }
 
   /**
-   * Fast-forward a guided fold to the current slider target. The modal opens at 100%; without
-   * this burst the mesh eases in over many frames and can look flat / overlapped on arrival.
+   * Fast-forward a guided fold to the current slider target. The modal now opens flat (target 0),
+   * so this is a no-op on open (the early return below) and only does work once the user scrubs the
+   * fold slider to a non-zero target — without the burst the mesh would ease in over many frames.
    */
   warmToTarget(): void {
     if (!this.fold || !this.guided || !this.cpu || this.targetFold < FOLD_REACHED_EPS) return;
@@ -348,6 +376,118 @@ export class SimCanvas {
     if (this.posAttr) this.posAttr.needsUpdate = true;
     this.geo?.computeVertexNormals();
     if (this.molMesh?.visible) this.molGeo?.computeVertexNormals();
+    if (this.material === "printed") this.updatePrintedTiles();
+  }
+
+  /**
+   * Build the 3D-printed thick-tile layer: one solid prism per face, inset from its fold edges so
+   * the bare-fabric hinge gap shows. The vertex buffer is non-indexed and rebuilt every frame from
+   * the live folded positions (`updatePrintedTiles`) since the extrusion follows each face normal.
+   */
+  private buildPrintedTiles(net: FoldNet): void {
+    if (!this.fold) return;
+    const pos = this.fold.model.position;
+    // Visual thickness/gap from the model size (physics closure is ratio-based, set elsewhere).
+    let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < pos.length; i += 3) {
+      minX = Math.min(minX, pos[i]); maxX = Math.max(maxX, pos[i]);
+      minY = Math.min(minY, pos[i + 1]); maxY = Math.max(maxY, pos[i + 1]);
+      minZ = Math.min(minZ, pos[i + 2]); maxZ = Math.max(maxZ, pos[i + 2]);
+    }
+    const diag = Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) || 1;
+    // One-sided: the full tile thickness extrudes to ONE side of the hinge plane (the +normal face);
+    // the cloth surface mesh stays at the plane as the backing. (Was centered ±thick/2.)
+    this.tileT = diag * TILE_THICK_FRAC;
+
+    this.tileFaces = net.faces.flat();
+    const nTris = this.tileFaces.length / 3;
+    // Kirigamized meshes can have mixed face winding (some faces' raw normals point the opposite
+    // way), which would extrude their tiles to the wrong side → tiles on both faces, cloth in the
+    // middle. Pin every tile to ONE side: compute a per-face sign vs the mesh's mean (flat) normal,
+    // so flipped faces extrude with the majority. Computed once from the flat rest pose.
+    this.tileSign = new Float32Array(nTris);
+    {
+      const r = this.fold.model.rest;
+      const ff = this.tileFaces;
+      const nrm: number[][] = [];
+      let mx = 0, my = 0, mz = 0;
+      for (let f = 0; f < ff.length; f += 3) {
+        const a = ff[f] * 3, b = ff[f + 1] * 3, c = ff[f + 2] * 3;
+        const nx = (r[b + 1] - r[a + 1]) * (r[c + 2] - r[a + 2]) - (r[b + 2] - r[a + 2]) * (r[c + 1] - r[a + 1]);
+        const ny = (r[b + 2] - r[a + 2]) * (r[c] - r[a]) - (r[b] - r[a]) * (r[c + 2] - r[a + 2]);
+        const nz = (r[b] - r[a]) * (r[c + 1] - r[a + 1]) - (r[b + 1] - r[a + 1]) * (r[c] - r[a]);
+        nrm.push([nx, ny, nz]); mx += nx; my += ny; mz += nz;
+      }
+      for (let i = 0; i < nrm.length; i++) {
+        const [nx, ny, nz] = nrm[i];
+        this.tileSign[i] = nx * mx + ny * my + nz * mz >= 0 ? 1 : -1;
+      }
+    }
+    this.thickPos = new Float32Array(nTris * 21 * 3); // 7 tris (top + 3 side quads) × 3 verts each
+    this.thickGeo = new THREE.BufferGeometry();
+    this.thickAttr = new THREE.BufferAttribute(this.thickPos, 3);
+    this.thickAttr.setUsage(THREE.DynamicDrawUsage);
+    this.thickGeo.setAttribute("position", this.thickAttr);
+    const mat = new THREE.MeshStandardMaterial({
+      color: COLOR_TILE,
+      side: THREE.DoubleSide,
+      flatShading: true,
+      metalness: 0.0,
+      roughness: 0.6,
+    });
+    this.group.add(new THREE.Mesh(this.thickGeo, mat));
+    this.updatePrintedTiles();
+  }
+
+  /** Refill the printed-tile vertex buffer from the current folded positions. */
+  private updatePrintedTiles(): void {
+    const faces = this.tileFaces;
+    const out = this.thickPos;
+    if (!faces || !out || !this.fold) return;
+    const p = this.fold.model.position;
+    const t = this.tileT;
+    let o = 0;
+    const push = (x: number, y: number, z: number): void => {
+      out[o++] = x; out[o++] = y; out[o++] = z;
+    };
+    for (let f = 0; f < faces.length; f += 3) {
+      const a = faces[f] * 3, b = faces[f + 1] * 3, c = faces[f + 2] * 3;
+      const ax = p[a], ay = p[a + 1], az = p[a + 2];
+      const bx = p[b], by = p[b + 1], bz = p[b + 2];
+      const cx = p[c], cy = p[c + 1], cz = p[c + 2];
+      const gx = (ax + bx + cx) / 3, gy = (ay + by + cy) / 3, gz = (az + bz + cz) / 3;
+      // face normal
+      let nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+      let ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+      let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      const sgn = this.tileSign ? this.tileSign[f / 3] : 1; // pin to the consistent (one-sided) face
+      nx = (nx / nl) * sgn; ny = (ny / nl) * sgn; nz = (nz / nl) * sgn;
+      // shrink each corner a fixed fraction toward the centroid (scale-free; exposes the bare-cloth
+      // hinge strip between tiles), then offset along the normal → top plate at +t, bottom plate at
+      // the hinge plane (s=0): the tile sits on ONE side, with the cloth surface as its backing.
+      const corner = (x: number, y: number, z: number, s: number): [number, number, number] => {
+        const ix = x + (gx - x) * TILE_INSET_FRAC;
+        const iy = y + (gy - y) * TILE_INSET_FRAC;
+        const iz = z + (gz - z) * TILE_INSET_FRAC;
+        return [ix + nx * s, iy + ny * s, iz + nz * s];
+      };
+      // top plate at +t along the normal; the wall bases sit at the hinge plane (s = 0).
+      const t0 = corner(ax, ay, az, t), t1 = corner(bx, by, bz, t), t2 = corner(cx, cy, cz, t);
+      const b0 = corner(ax, ay, az, 0), b1 = corner(bx, by, bz, 0), b2 = corner(cx, cy, cz, 0);
+      // top plate + 3 side quads. NO bottom plate: it sat coincident on the cloth plane (s = 0) and
+      // z-fought the fabric backing, showing as 3D-print artifacts on the underside of the cloth.
+      // The cloth mesh is the tile's backing, so the open bottom is hidden behind it.
+      push(...t0); push(...t1); push(...t2);
+      const tops = [t0, t1, t2], bots = [b0, b1, b2];
+      for (let e = 0; e < 3; e++) {
+        const j = (e + 1) % 3;
+        push(...bots[e]); push(...bots[j]); push(...tops[j]);
+        push(...bots[e]); push(...tops[j]); push(...tops[e]);
+      }
+    }
+    this.thickAttr!.needsUpdate = true;
+    this.thickGeo!.computeVertexNormals();
   }
 
   /**
@@ -387,6 +527,11 @@ export class SimCanvas {
     this.molGeo = null;
     this.molMesh = null;
     this.posAttr = null;
+    this.thickGeo?.dispose();
+    this.thickGeo = null;
+    this.thickPos = null;
+    this.thickAttr = null;
+    this.tileFaces = null;
     this.cpu = null;
     this.faceMat = null;
     this.creaseLines = [];

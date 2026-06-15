@@ -154,6 +154,7 @@ describe("placeSheet — single-sheet gate", () => {
       lips: [],
       vents: [],
       reliefEdges: [],
+      reliefPruned: 0,
       totalCutLength: 0,
     };
     expect(() => placeSheet(fake, { mesh: cube, topo, defects })).toThrow(/one connected sheet/);

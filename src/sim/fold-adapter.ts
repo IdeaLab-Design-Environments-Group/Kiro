@@ -7,5 +7,12 @@
  * guided-cone path has been retired from the default route; `build.ts` still exposes
  * `buildFoldScene` for the pyramid-recompute fallback in `scene.ts`.
  */
-export { buildSceneFromFold, isFoldable, ORIGAMI_PARAMS } from "./origami-import.js";
-export type { FoldScene } from "./origami-import.js";
+export {
+  buildSceneFromFold,
+  isFoldable,
+  ORIGAMI_PARAMS,
+  PRINTED_PARAMS,
+  DEFAULT_PRINTED,
+  printedThetaMax,
+} from "./origami-import.js";
+export type { FoldScene, SimMaterial, PrintedParams } from "./origami-import.js";

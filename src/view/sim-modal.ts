@@ -1,4 +1,4 @@
-import type { FoldScene } from "../sim/index.js";
+import type { FoldScene, SimMaterial } from "../sim/index.js";
 import type { SimCanvas } from "./sim-canvas.js";
 
 /** Returns a ready fold scene when the sim opens, or null when no model is loaded. */
@@ -17,8 +17,11 @@ export class SimModal {
   private readonly statusEl: HTMLElement;
   private readonly foldSlider: HTMLInputElement;
   private readonly foldValue: HTMLElement;
+  private readonly tabs: HTMLButtonElement[];
   private provider: SimSceneProvider | null = null;
   private canvas: SimCanvas | null = null;
+  private material: SimMaterial = "vinyl";
+  private materialListener: ((m: SimMaterial) => void) | null = null;
 
   constructor() {
     this.trigger = document.createElement("button");
@@ -43,13 +46,17 @@ export class SimModal {
           <button type="button" class="sim-modal-close" aria-label="Close">×</button>
         </header>
         <div class="sim-modal-body">
+          <div class="sim-tabs" role="tablist">
+            <button type="button" class="sim-tab is-active" data-material="vinyl" role="tab" aria-selected="true">Vinyl / paper</button>
+            <button type="button" class="sim-tab" data-material="printed" role="tab" aria-selected="false">3D-printed</button>
+          </div>
           <div class="sim-canvas-mount"></div>
         </div>
         <footer class="sim-modal-footer">
           <span class="sim-status"></span>
           <label class="sim-fold-control">
-            Fold <span class="sim-fold-value">100%</span>
-            <input type="range" class="sim-fold-slider" min="0" max="100" step="1" value="100" />
+            Fold <span class="sim-fold-value">0%</span>
+            <input type="range" class="sim-fold-slider" min="0" max="100" step="1" value="0" />
           </label>
           <button type="button" class="sim-reset-btn">Reset fold</button>
         </footer>
@@ -60,6 +67,10 @@ export class SimModal {
     this.statusEl = this.overlay.querySelector(".sim-status")!;
     this.foldSlider = this.overlay.querySelector(".sim-fold-slider")!;
     this.foldValue = this.overlay.querySelector(".sim-fold-value")!;
+    this.tabs = Array.from(this.overlay.querySelectorAll<HTMLButtonElement>(".sim-tab"));
+    for (const tab of this.tabs) {
+      tab.addEventListener("click", () => this.selectMaterial(tab.dataset.material as SimMaterial));
+    }
 
     this.foldSlider.addEventListener("input", () => this.applyFold());
     this.overlay.querySelector(".sim-modal-close")!.addEventListener("click", () => this.close());
@@ -78,6 +89,24 @@ export class SimModal {
 
   setProvider(provider: SimSceneProvider): void {
     this.provider = provider;
+  }
+
+  /** Notified when the user switches the Vinyl / 3D-printed tab (controller stores it). */
+  onMaterialChange(cb: (m: SimMaterial) => void): void {
+    this.materialListener = cb;
+  }
+
+  /** Switch the sim material tab: update state, then rebuild the scene (fold % is preserved). */
+  private selectMaterial(m: SimMaterial): void {
+    if (m === this.material) return;
+    this.material = m;
+    for (const tab of this.tabs) {
+      const on = tab.dataset.material === m;
+      tab.classList.toggle("is-active", on);
+      tab.setAttribute("aria-selected", String(on));
+    }
+    this.materialListener?.(m); // update the store before rebuilding so the provider sees the new material
+    if (this.canvas) this.loadWorld();
   }
 
   /** Enable/disable the 3D Sim button (e.g. only when a foldable model is loaded). */
@@ -121,7 +150,7 @@ export class SimModal {
         : `${net.faces.length} tris`;
       this.statusEl.textContent =
         `Folding ${built.title} — ${net.vertices.length} verts, ${triLabel}, ` +
-        `${net.edges.filter((e) => e.faces.length >= 2).length} creases. Drag to orbit.`;
+        `${built.scene.model.creases.count} creases. Drag to orbit.`;
     } catch (err) {
       this.statusEl.textContent = `Cannot simulate this model: ${(err as Error).message}`;
       this.canvas.stop();

@@ -68,7 +68,11 @@ export function buildFkldSvgExport(fold: FoldFile, baseName = "kirigami"): SvgEx
   const h = maxY - minY + 2 * MARGIN;
   const T = (i: number): P => ({ x: pts[i]!.x - minX + MARGIN, y: maxY - pts[i]!.y + MARGIN });
 
-  // Classify edges by assignment into the cut (B,C) and score (M,V) layers; F is excluded.
+  // Classify edges into the cut layer (boundary B = full-sheet silhouette; cut C = interior
+  // slits/darts/vents) and the score layer (M,V); F is excluded. B and C are kept SEPARATE so the
+  // silhouette can be filled while every performed cut is always stroked on top of it (never
+  // swallowed by the fill) — so all cuts to perform on the paper stay visible.
+  const boundaryEdges: [number, number][] = [];
   const cutEdges: [number, number][] = [];
   const scoreSegs: string[] = [];
   for (let i = 0; i < edges.length; i++) {
@@ -77,16 +81,18 @@ export function buildFkldSvgExport(fold: FoldFile, baseName = "kirigami"): SvgEx
     const a = e[0], b = e[1];
     if (a == null || b == null || a >= pts.length || b >= pts.length) continue;
     const role = assign[i] ?? "B";
-    if (role === "B" || role === "C") {
+    if (role === "B") {
+      boundaryEdges.push([a, b]);
+    } else if (role === "C") {
       cutEdges.push([a, b]);
     } else if (role === "M" || role === "V") {
       const seg = shortenedSeg(T(a), T(b), SCORE_END_GAP);
       if (seg) scoreSegs.push(seg);
     }
   }
-  if (cutEdges.length === 0 && scoreSegs.length === 0) return null;
+  if (boundaryEdges.length === 0 && cutEdges.length === 0 && scoreSegs.length === 0) return null;
 
-  const cutBody = cutMarkup(cutEdges, T);
+  const cutBody = cutMarkup(boundaryEdges, cutEdges, T);
   const scoreBody = scoreSegs.length
     ? `<path d="${scoreSegs.join(" ")}" fill="none" stroke="${SCORE_COLOR}" stroke-width="${STROKE_W}" />`
     : "";
@@ -116,21 +122,32 @@ export function buildFkldSvgExport(fold: FoldFile, baseName = "kirigami"): SvgEx
 }
 
 /**
- * Cut layer markup. Boundary `B` edges are assembled into closed loops and emitted as one filled
- * even-odd `<path>` (a clean single silhouette cut, as AKDE does); if they don't form clean loops
- * (open / non-manifold boundary) we fall back to stroking them so nothing is ever dropped. Cut `C`
- * edges (slits/darts) are always black strokes.
+ * Cut layer markup. Boundary `B` edges (the full-sheet silhouette) are assembled into closed loops
+ * and emitted as one filled even-odd `<path>` (a clean single silhouette cut, as AKDE does); if they
+ * don't form clean loops (open / non-manifold boundary) we fall back to stroking them so nothing is
+ * ever dropped. Cut `C` edges (interior slits/darts/vents) are then ALWAYS stroked on top, so every
+ * performed cut stays visible and is never hidden inside the silhouette fill. Closed meshes have no
+ * `B` edges — their flat-net perimeter is itself `C` lips, so the stroked cuts form the outline.
  */
-function cutMarkup(cutEdges: [number, number][], T: (i: number) => P): string {
-  if (cutEdges.length === 0) return "";
-  const loops = assembleLoops(cutEdges);
+function cutMarkup(
+  boundaryEdges: [number, number][],
+  cutEdges: [number, number][],
+  T: (i: number) => P,
+): string {
   const parts: string[] = [];
-  if (loops) {
-    const d = loops
-      .map((loop) => "M " + loop.map((i, k) => (k === 0 ? "" : "L ") + ptStr(T(i))).join(" ") + " Z")
-      .join(" ");
-    parts.push(`<path d="${d}" fill="${CUT_COLOR}" fill-rule="evenodd" stroke="none" />`);
-  } else {
+  if (boundaryEdges.length > 0) {
+    const loops = assembleLoops(boundaryEdges);
+    if (loops) {
+      const d = loops
+        .map((loop) => "M " + loop.map((i, k) => (k === 0 ? "" : "L ") + ptStr(T(i))).join(" ") + " Z")
+        .join(" ");
+      parts.push(`<path d="${d}" fill="${CUT_COLOR}" fill-rule="evenodd" stroke="none" />`);
+    } else {
+      const d = boundaryEdges.map(([a, b]) => `M ${ptStr(T(a))} L ${ptStr(T(b))}`).join(" ");
+      parts.push(`<path d="${d}" fill="none" stroke="${CUT_COLOR}" stroke-width="${STROKE_W}" />`);
+    }
+  }
+  if (cutEdges.length > 0) {
     const d = cutEdges.map(([a, b]) => `M ${ptStr(T(a))} L ${ptStr(T(b))}`).join(" ");
     parts.push(`<path d="${d}" fill="none" stroke="${CUT_COLOR}" stroke-width="${STROKE_W}" />`);
   }

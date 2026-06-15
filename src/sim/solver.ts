@@ -6,6 +6,7 @@ import {
   computeThetas,
   integrate,
 } from "./forces.js";
+import { accumulateCollisionForces, buildCollisionState, DEFAULT_COLLISION, type CollisionParams } from "./collision.js";
 import {
   dampVelocity,
   guardFinite,
@@ -58,7 +59,8 @@ export interface SettleResult {
  * static state.
  */
 export class FoldSolver {
-  readonly dt: number;
+  /** Stable explicit timestep; recomputed by {@link enableCollision} since contact adds stiffness. */
+  dt: number;
   /** Persistent per-crease fold angle, unwrapped across steps. */
   readonly theta: Float32Array;
   foldPercent = 0;
@@ -68,12 +70,23 @@ export class FoldSolver {
     this.theta = new Float32Array(model.creases.count);
   }
 
+  /**
+   * Turn on penalty self-collision so folded layers can't pass through each other. Builds the
+   * model's collision state and refreshes `dt` (the contact stiffness enters the stability bound).
+   * No-op equivalent if never called: the bare Gershenfeld model has no collisions.
+   */
+  enableCollision(params: CollisionParams = DEFAULT_COLLISION): void {
+    this.model.collide = buildCollisionState(this.model, params);
+    this.dt = computeDt(this.model);
+  }
+
   /** Advance one explicit step at the current `foldPercent`. */
   step(): void {
     this.driveBoundary();
     computeFaceNormals(this.model);
     computeThetas(this.model, this.theta);
     accumulateForces(this.model, this.theta, this.foldPercent);
+    if (this.model.collide) accumulateCollisionForces(this.model, this.model.collide);
     integrate(this.model, this.dt);
   }
 
@@ -84,6 +97,9 @@ export class FoldSolver {
    */
   private driveBoundary(): void {
     const m = this.model;
+    // 3D-printed soft-driven mode: driven nodes are moved by the goal-spring force (forces.ts),
+    // not hard-placed here, so thick-hinge barriers can relax an over-closed goal pose.
+    if (m.softDriven) return;
     const fp = this.foldPercent;
     for (let i = 0; i < m.numNodes; i++) {
       if (!m.driven[i]) continue;

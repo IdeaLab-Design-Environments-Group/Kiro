@@ -137,8 +137,10 @@ export interface UnfoldResult {
   lips: LipPair[];
   /** Vent slivers removed at δ<0 vertices. */
   vents: VentRecord[];
-  /** Source-mesh edge ids added by the relief loop. */
+  /** Source-mesh edge ids added by the relief loop and KEPT after pruning. */
   reliefEdges: number[];
+  /** Relief edges dropped by post-relief pruning (0 when pruning is off). */
+  reliefPruned: number;
   /** Sum of source-edge lengths over all cuts incl. relief (mm). */
   totalCutLength: number;
 }

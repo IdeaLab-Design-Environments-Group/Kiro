@@ -327,6 +327,38 @@ body {
   background: #f4f6fb;
 }
 
+.sim-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0.5rem 1rem 0;
+  background: #f4f6fb;
+  border-bottom: 1px solid #e2e2e2;
+}
+
+.sim-tab {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.45rem 1rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: #555;
+  cursor: pointer;
+  border-radius: 5px 5px 0 0;
+}
+
+.sim-tab:hover {
+  color: #1741c4;
+}
+
+.sim-tab.is-active {
+  background: #fff;
+  border-color: #e2e2e2;
+  color: #1741c4;
+  font-weight: 600;
+  margin-bottom: -1px;
+}
+
 .sim-canvas-mount {
   width: 100%;
   height: min(62vh, 560px);

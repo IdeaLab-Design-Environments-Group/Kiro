@@ -39,6 +39,13 @@ import {
 /** Hard cap on relief-loop iterations (each adds ≥1 cut edge, so ≤E anyway). */
 export const RELIEF_MAX = 64;
 
+/**
+ * Cap on post-relief pruning passes. Each pass re-tries every still-present
+ * relief edge; removing one can make another removable, so we iterate to a
+ * fixed point, bounded here so a pathological mesh stays linear-ish.
+ */
+const PRUNE_MAX_PASSES = 4;
+
 /** Relative tolerance for the developability audit (per edge length). */
 const AUDIT_REL = 1e-6;
 
@@ -911,7 +918,9 @@ export function seamedUnfold(
   topo: MeshTopology,
   plan: CutPlan,
   defects: DefectReport,
+  opts: { pruneRelief?: boolean } = {},
 ): UnfoldResult {
+  const pruneRelief = opts.pruneRelief ?? false;
   const cutSet = new Set(plan.cutEdges);
   const reliefEdges: number[] = [];
 
@@ -939,17 +948,42 @@ export function seamedUnfold(
     const overlap = findSelfOverlap(flat, cut.mesh.faces);
 
     if (overlap === null) {
+      // Post-relief minimization (opt-in): the relief loop adds edges
+      // monotonically and never re-examines them, so an edge added to fix an
+      // early overlap is often made redundant by later additions. Drop every
+      // relief edge whose removal still develops cleanly, then re-derive the
+      // returned artifacts from the pruned cut set so they stay consistent.
+      let finalCut = cut;
+      let finalFlat = flat;
+      let finalComponents = components;
+      let reliefPruned = 0;
+      if (pruneRelief && reliefEdges.length > 0) {
+        reliefPruned = pruneReliefEdges(mesh, topo, cutSet, reliefEdges, ventAngles);
+        if (reliefPruned > 0) {
+          finalCut = cutAlongEdges(mesh, topo, [...cutSet], ventAngles);
+          finalComponents = labelComponents(finalCut.mesh);
+          finalFlat = unfoldPatch(finalCut, finalCut.mesh.faces.map((_, f) => f));
+          // Defensive: pruning only accepts clean removals, so this must hold.
+          if (findSelfOverlap(finalFlat, finalCut.mesh.faces) !== null) {
+            throw new PipelineError(
+              "unfold",
+              "relief pruning produced an overlapping development (internal invariant violated)",
+            );
+          }
+        }
+      }
       const totalCutLength = [...cutSet].reduce((acc, e) => acc + edgeLength(mesh, topo, e), 0);
       return {
-        flat,
-        faces: cut.mesh.faces,
-        patchOfFace: components.label,
-        patchCount: components.count,
-        origVertex: cut.origVertex,
-        goalPos: cut.goalPos,
-        lips: cut.lips,
-        vents: cut.vents,
+        flat: finalFlat,
+        faces: finalCut.mesh.faces,
+        patchOfFace: finalComponents.label,
+        patchCount: finalComponents.count,
+        origVertex: finalCut.origVertex,
+        goalPos: finalCut.goalPos,
+        lips: finalCut.lips,
+        vents: finalCut.vents,
         reliefEdges: [...reliefEdges],
+        reliefPruned,
         totalCutLength,
       };
     }
@@ -1002,6 +1036,70 @@ function labelComponents(mesh: TriMesh): { count: number; label: number[] } {
     count++;
   }
   return { count, label };
+}
+
+/**
+ * True iff cutting `mesh` along `edges` (with vents) yields ONE connected piece
+ * that flattens with no self-overlap. Same trial `addReliefCut` runs, factored
+ * out for the pruning pass. A vent-placement failure (PipelineError "unfold")
+ * counts as "does not develop cleanly" rather than a pipeline failure.
+ */
+function developsCleanly(
+  mesh: TriMesh,
+  topo: MeshTopology,
+  edges: number[],
+  ventAngles: Map<number, number>,
+): boolean {
+  try {
+    const trial = cutAlongEdges(mesh, topo, edges, ventAngles);
+    if (labelComponents(trial.mesh).count !== 1) return false;
+    const flat = unfoldPatch(trial, trial.mesh.faces.map((_, f) => f));
+    return findSelfOverlap(flat, trial.mesh.faces) === null;
+  } catch (err) {
+    if (err instanceof PipelineError && err.stage === "unfold") return false;
+    throw err;
+  }
+}
+
+/**
+ * Post-relief minimization. Greedily drop every RELIEF edge whose removal still
+ * develops cleanly (one piece, overlap-free). Only relief edges are candidates:
+ * planned cuts (`plan.cutEdges`) carry 3D curvature-relief duty that the flat
+ * developability test cannot judge, so they are never offered here. Vent slits
+ * are protected automatically — removing one makes `cutAlongEdges` fail to place
+ * the vent, which `developsCleanly` treats as "not removable".
+ *
+ * Reverse addition order (last-added is likeliest redundant); iterate to a fixed
+ * point capped at `PRUNE_MAX_PASSES`. Mutates `cutSet` and rewrites `reliefEdges`
+ * to the kept set; returns the number of edges removed.
+ */
+function pruneReliefEdges(
+  mesh: TriMesh,
+  topo: MeshTopology,
+  cutSet: Set<number>,
+  reliefEdges: number[],
+  ventAngles: Map<number, number>,
+): number {
+  // Relief edges still in the cut set (tier-3 swaps may have dropped some).
+  const kept = reliefEdges.filter((e) => cutSet.has(e));
+  let removed = 0;
+  for (let pass = 0; pass < PRUNE_MAX_PASSES; pass++) {
+    let removedThisPass = 0;
+    for (let i = kept.length - 1; i >= 0; i--) {
+      const e = kept[i];
+      const trialEdges = [...cutSet].filter((x) => x !== e);
+      if (developsCleanly(mesh, topo, trialEdges, ventAngles)) {
+        cutSet.delete(e);
+        kept.splice(i, 1);
+        removed++;
+        removedThisPass++;
+      }
+    }
+    if (removedThisPass === 0) break;
+  }
+  reliefEdges.length = 0;
+  reliefEdges.push(...kept);
+  return removed;
 }
 
 /**

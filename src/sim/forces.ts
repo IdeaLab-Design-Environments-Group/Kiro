@@ -1,4 +1,4 @@
-import type { BarHingeModel } from "./model.js";
+import { type BarHingeModel, TILE_COLLIDE_SIGN } from "./model.js";
 
 /**
  * Gershenfeld bar-and-hinge force math, written once as pure CPU functions over the SoA
@@ -155,7 +155,17 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
     const coef2 = proj2 / el;
 
     const target = m.creases.targetTheta[i] * foldPercent;
-    const angForce = m.creases.k[i] * (target - lastTheta[i]); // −k(θ − θ_target)
+    let angForce = m.creases.k[i] * (target - lastTheta[i]); // −k(θ − θ_target)
+    // 3D-printed mode: ONE-SIDED barrier resisting closure past the thickness/gap limit θ_max only on
+    // the tile side (the rigid tiles sit on the +normal face, TILE_COLLIDE_SIGN). Folding toward them
+    // (s·θ > θ_max) is pushed back so the tiles stop short of colliding; the fabric-backing side folds
+    // freely. Inactive in vinyl mode (thetaMax unset).
+    const tmax = m.creases.thetaMax;
+    if (tmax) {
+      const s = TILE_COLLIDE_SIGN;
+      const th = lastTheta[i];
+      if (s * th > tmax[i]) angForce += (m.params.kBarrier ?? 0) * (s * tmax[i] - th);
+    }
 
     // wing nodes
     F[3 * n1i] += (angForce / h1) * normal1.x;
@@ -217,6 +227,20 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
     addScaled(F, ic, ncBC, -d1 + d2);
   }
 
+  // --- 3D-printed soft-driven goal spring -------------------------------------------
+  // In printed mode driven boundary nodes are NOT hard-pinned (so hinge barriers can open an
+  // over-closed goal); a stiff spring pulls each toward its kinematic target rest→goal·foldPercent.
+  if (m.softDriven) {
+    const kGoal = m.params.kGoal ?? 0;
+    for (let i = 0; i < m.numNodes; i++) {
+      if (!m.driven[i]) continue;
+      for (let d = 0; d < 3; d++) {
+        const tgt = m.rest[3 * i + d] + (m.goal[3 * i + d] - m.rest[3 * i + d]) * foldPercent;
+        F[3 * i + d] += kGoal * (tgt - pos[3 * i + d]);
+      }
+    }
+  }
+
   // zero out forces on fixed nodes so they never move
   for (let i = 0; i < m.numNodes; i++) {
     if (m.fixed[i]) {
@@ -251,12 +275,20 @@ export function integrate(m: BarHingeModel, dt: number): void {
   }
 }
 
-/** Stable timestep dt < 1/(2π·ω_max), ω_max = max√(k_axial/m_min); paper Eqs 7–8 (0.9 margin). */
+/** Stable timestep dt < 1/(2π·ω_max), ω_max = max√(k_axial/m_min); paper Eqs 7–8 (0.9 margin).
+ *  When self-collision is on, its penalty stiffness is another spring on the lightest node, so it
+ *  enters ω_max too — otherwise a stiff contact would blow up the explicit integrator. */
 export function computeDt(m: BarHingeModel): number {
   let maxFreq = 0;
   for (let i = 0; i < m.beams.count; i++) {
     const mMin = Math.min(m.mass[m.beams.n0[i]], m.mass[m.beams.n1[i]]);
     const w = Math.sqrt(m.beams.k[i] / mMin);
+    if (w > maxFreq) maxFreq = w;
+  }
+  if (m.collide) {
+    let mMin = Infinity;
+    for (let i = 0; i < m.numNodes; i++) if (m.mass[i] < mMin) mMin = m.mass[i];
+    const w = Math.sqrt(m.collide.params.k / (mMin || 1));
     if (w > maxFreq) maxFreq = w;
   }
   if (maxFreq <= 0) return 1e-3;

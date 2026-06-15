@@ -28,6 +28,7 @@
       --perforation: #c4321b;
       --face-top: #e8eef9;   /* CCW-facing side (FOLD cyan) */
       --face-bot: #fff4cd;   /* CW-facing side  (FOLD yellow) */
+      --body:     #efe7d2;   /* opaque "full sheet of paper" the cuts sit on */
     }
     * { box-sizing: border-box; }
     body {
@@ -147,6 +148,9 @@
        the viewBox scale and a thin "5 2" dashed line becomes a 5-units
        black blob bigger than the entire viewport. */
     svg polygon, svg line, svg circle, svg path { vector-effect: non-scaling-stroke; }
+    /* Opaque full-sheet silhouette drawn beneath the (optional) translucent faces, so dart/vent
+       gaps read as slits in a solid body of paper rather than see-through holes. */
+    svg .body-fill { stroke: none; fill: var(--body); fill-opacity: 1; }
     svg .face { stroke: none; fill-opacity: 0.45; }
     svg .face.top { fill: var(--face-top); }
     svg .face.bot { fill: var(--face-bot); }
@@ -172,7 +176,7 @@
     svg .edge.F { stroke: var(--facet); stroke-width: 0.8; }
     svg .edge.B { stroke: var(--boundary); stroke-width: 2; }
     svg .edge.U { stroke: var(--unassigned); }
-    svg .edge.C { stroke: var(--bad); stroke-width: 2; }
+    svg .edge.C { stroke: var(--bad); stroke-width: 2.5; }
     svg .edge.C.major       { stroke: var(--major); }
     svg .edge.C.minor       { stroke: var(--minor); }
     svg .edge.C.seam        { stroke: var(--seam); stroke-dasharray: 6 3; }
@@ -281,6 +285,7 @@
 
   // ---- state ----------------------------------------------------------------
   const layers = {
+    'Full body': { on: true },     // opaque paper silhouette so cuts read as slits, not holes
     Faces:     { on: true },
     Edges:     { on: true },
     Vertices:  { on: false },
@@ -371,6 +376,17 @@
     const faceDepth = f => -dot(sub(f.c, cam.c), cam.z);
     model.fs.sort((a, b) => faceDepth(a) - faceDepth(b));
 
+    // Full body: every face as one opaque paper silhouette beneath the rest, so the kirigamized
+    // sheet reads as a complete body and dart/vent gaps appear as slits, not see-through holes.
+    if (layers['Full body'].on) {
+      for (const f of model.fs) {
+        if (f.vs.length < 3) continue;
+        const poly = document.createElementNS(NS, 'polygon');
+        poly.setAttribute('points', f.vs.map(v => v.p.slice(0,2).join(',')).join(' '));
+        poly.setAttribute('class', 'body-fill');
+        svg.appendChild(poly);
+      }
+    }
     // Faces.
     if (layers.Faces.on) {
       for (const f of model.fs) {
@@ -392,9 +408,11 @@
       }
     }
     // Edges. Stroke widths come entirely from CSS — non-scaling-stroke
-    // keeps them in screen pixels regardless of viewBox or rotation.
+    // keeps them in screen pixels regardless of viewBox or rotation. Cuts (C) are drawn LAST
+    // (stable sort) so every performed cut sits on top of the body fill and the other creases.
     if (layers.Edges.on) {
-      for (const e of model.es) {
+      const ordered = [...model.es].sort((a, b) => (a.assign === 'C' ? 1 : 0) - (b.assign === 'C' ? 1 : 0));
+      for (const e of ordered) {
         const line = document.createElementNS(NS, 'line');
         line.setAttribute('x1', e.v1.p[0]); line.setAttribute('y1', e.v1.p[1]);
         line.setAttribute('x2', e.v2.p[0]); line.setAttribute('y2', e.v2.p[1]);
@@ -545,6 +563,7 @@
     }
     // Legend.
     html += `<h2>Legend</h2>`;
+    html += `<div class="legend-item"><span class="swatch" style="height:10px;background:var(--body);border:1px solid var(--border)"></span>full body (paper)</div>`;
     html += [
       ['mountain (M)', 'mountain', true, '5 2'],
       ['valley (V)',   'valley',   true, '2 2'],
@@ -839,6 +858,7 @@
       ['AKDE hexagonal kirigami N=6 (FKLD)',  '../examples/akde-hex.fkld'],
       ['AKDE decagon kirigami N=10 (FKLD)',  '../examples/akde-decagon-pyramid.fkld'],
       ['AKDE square pyramid (FKLD)',    'akde-square-pyramid'],
+      ['RES Square Tower — Miyamoto kirigami (FKLD)',  '../examples/res-square-tower.fkld'],
       ['Simple 3D fold (FOLD)',         'simple'],
       ['Box folding (FOLD)',            'box'],
       ['Square twist crease (FOLD)',    'squaretwist'],

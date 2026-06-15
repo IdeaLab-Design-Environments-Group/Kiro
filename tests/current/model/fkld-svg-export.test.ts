@@ -53,6 +53,33 @@ describe("buildFkldSvgExport — layer mapping (synthetic)", () => {
     expect(out.previews.both).toContain("non-scaling-stroke");
   });
 
+  it("strokes interior C cuts on top of the filled B silhouette (no cut hidden by the fill)", () => {
+    // unit square (4 B edges = silhouette loop) + an interior C slit between two inner vertices.
+    const fold: FoldFile = {
+      frame_unit: "mm",
+      vertices_coords: [
+        [0, 0],
+        [10, 0],
+        [10, 10],
+        [0, 10],
+        [3, 5],
+        [7, 5],
+      ],
+      edges_vertices: [
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [3, 0],
+        [4, 5], // interior cut slit
+      ],
+      edges_assignment: ["B", "B", "B", "B", "C"],
+    };
+    const cut = buildFkldSvgExport(fold, "slit")!.files.find((f) => f.filename === "slit-cut.svg")!.svg;
+    expect(cut).toContain('fill="#000000"'); // B silhouette filled
+    expect(cut).toContain("Z"); // …as a closed loop
+    expect(cut).toContain('stroke="#000000"'); // C slit stroked on top, separately — not swallowed
+  });
+
   it("returns null when there's nothing to cut", () => {
     expect(buildFkldSvgExport({ vertices_coords: [], edges_vertices: [] }, "x")).toBeNull();
   });

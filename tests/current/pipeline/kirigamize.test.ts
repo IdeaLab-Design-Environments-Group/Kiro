@@ -95,6 +95,7 @@ function makeUnfold(sourceVertex: number) {
       ventEdges: [[0, 0] as [number, number]],
     }],
     reliefEdges: [],
+    reliefPruned: 0,
     totalCutLength: 0,
   };
 }

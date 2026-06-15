@@ -4,11 +4,20 @@ import { buildModel, DEFAULT_PARAMS, type BarHingeModel, type SolverParams } fro
 import { FoldSolver } from "./solver.js";
 import { vec3 } from "./vec3.js";
 
+/**
+ * Fabrication material the sim represents:
+ *  - "vinyl"   — thin uniformly-flexible sheet (the bar-and-hinge default; paper/vinyl kirigami).
+ *  - "printed" — rigid 3D-printed tiles on fabric hinges, with tile thickness limiting closure.
+ */
+export type SimMaterial = "vinyl" | "printed";
+
 /** A ready-to-run folding simulation: topology + bar-and-hinge model + solver. */
 export interface FoldScene {
   net: FoldNet;
   model: BarHingeModel;
   solver: FoldSolver;
+  /** Material this scene was built for (drives renderer thick-tile branch). Default "vinyl". */
+  material?: SimMaterial;
 }
 
 /**

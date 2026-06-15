@@ -20,6 +20,9 @@ describe("sim mesh display contract", () => {
     expect(net.meta.N).toBe(0); // not a recomputed pyramid net → sim-canvas draws the full mesh
     expect(net.tips.length).toBe(0);
     expect(model.numNodes).toBeGreaterThan(inV); // cuts were split open
+    // Split cut lips (relabeled "B" for the solver) are re-tagged "C" in the net so sim-canvas
+    // draws them as black cut lines on the flat full sheet, not as gray boundary.
+    expect(net.edges.some((e) => e.assignment === "C")).toBe(true);
   });
 
   // A legacy pyramid preset with NO declared footprint (akde-square-pyramid) falls back to the

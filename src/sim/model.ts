@@ -1,4 +1,5 @@
 import type { FoldNet, EdgeAssignment } from "./foldnet.js";
+import type { CollisionState } from "./collision.js";
 
 /**
  * Bar-and-hinge model in **struct-of-arrays** form — the CPU twin of Gershenfeld's GPU
@@ -44,6 +45,18 @@ export interface SolverParams {
    * to the pyramid base (radius R). v1 empirical default; see `foldMountain`.
    */
   foldValley: number;
+  /**
+   * 3D-PRINTED mode only. Stiffness of the soft goal-spring that pulls a *soft-driven* boundary
+   * node toward its kinematic target rest→goal·foldPercent (replaces the hard pin so thick-hinge
+   * barriers can push the goal pose open). Unused in vinyl mode.
+   */
+  kGoal?: number;
+  /**
+   * 3D-PRINTED mode only. Stiffness of the one-sided hinge barrier that resists closing a crease
+   * past `creases.thetaMax` (tile thickness/gap limit). Should be ≫ kGoal so contact wins. Unused
+   * in vinyl mode.
+   */
+  kBarrier?: number;
 }
 
 export const DEFAULT_PARAMS: SolverParams = {
@@ -60,6 +73,15 @@ export const DEFAULT_PARAMS: SolverParams = {
   foldValley: 2.9,
 };
 
+/**
+ * 3D-PRINTED mode: the rigid tiles sit on the **+face-normal** side of the hinge sheet, so closure
+ * is ONE-SIDED. The fold that brings the tile faces together — the direction where
+ * `TILE_COLLIDE_SIGN · θ` grows positive — is blocked by the tile thickness at `creases.thetaMax`;
+ * the opposite (fabric-backing) side folds freely to flat. Flip to −1 if a model's winding puts the
+ * tile side on the −θ direction (tiles would otherwise interpenetrate when folding toward them).
+ */
+export const TILE_COLLIDE_SIGN = 1;
+
 export interface BarHingeModel {
   numNodes: number;
 
@@ -74,6 +96,19 @@ export interface BarHingeModel {
   goal: Float32Array;
   /** N — 1 = boundary node kinematically driven rest→goal by foldPercent (forward process). */
   driven: Uint8Array;
+  /**
+   * 3D-PRINTED mode only. When true, driven nodes are NOT hard-pinned: the solver skips the
+   * kinematic placement and instead a goal-spring (params.kGoal) pulls them toward rest→goal,
+   * so the thick-hinge barriers can relax an over-closed goal pose. Undefined ⇒ vinyl (hard pin).
+   */
+  softDriven?: boolean;
+
+  /**
+   * Self-collision state (penalty layer-vs-layer repulsion so folds don't pass through each
+   * other). Undefined ⇒ collisions off (the bare Gershenfeld model). Set via
+   * {@link FoldSolver.enableCollision}; the solver folds its stiffness into the stable dt.
+   */
+  collide?: CollisionState;
 
   beams: {
     count: number;
@@ -94,6 +129,11 @@ export interface BarHingeModel {
     k: Float32Array; // crease stiffness (incl. kirigami cut coupling)
     targetTheta: Float32Array; // design fold angle (signed); scaled by foldPercent at solve
     assignment: EdgeAssignment[];
+    /**
+     * 3D-PRINTED mode only. Per-crease max |fold angle| before tiles of the print thickness collide
+     * across the fabric gap (θ_max = 2·atan(g/t)). Undefined ⇒ vinyl (no thickness limit).
+     */
+    thetaMax?: Float32Array;
   };
 
   faces: {

@@ -11,7 +11,11 @@ import type { KirigamiInputs } from "@kirigami/model/types.js";
 import { computeState } from "@kirigami/model/geometry.js";
 import { buildFoldScene } from "./build.js";
 import { buildSceneFromFold, isFoldable } from "./fold-adapter.js";
-import type { FoldScene } from "./build.js";
+import { ORIGAMI_PARAMS, PRINTED_PARAMS } from "./origami-import.js";
+import type { FoldScene, SimMaterial } from "./build.js";
+import type { SolverParams } from "./model.js";
+
+export type { SimMaterial };
 
 /** Which simulator handled the model: `kirigami` (cut-aware / guided) or `origami` (Neil's free fold). */
 export type SimKind = "kirigami" | "origami";
@@ -21,7 +25,11 @@ export interface BuiltScene {
   scene: FoldScene;
   mode: FoldMode;
   sim: SimKind;
+  /** Fabrication material this scene models (vinyl thin-sheet vs 3D-printed rigid tiles). */
+  material: SimMaterial;
 }
+
+const paramsFor = (m: SimMaterial): SolverParams => (m === "printed" ? PRINTED_PARAMS : ORIGAMI_PARAMS);
 
 const num = (re: RegExp, s: string): number | null => {
   const m = re.exec(s);
@@ -63,32 +71,37 @@ const anyDriven = (driven: Uint8Array): boolean => {
   return false;
 };
 
-/** Build the fold scene for a model — one uniform Origami-Simulator engine, mode inferred per file. */
-export function buildScene(fold: FoldFile): BuiltScene | null {
+/**
+ * Build the fold scene for a model — one uniform Origami-Simulator engine, mode inferred per file.
+ * `material` selects vinyl (thin flexible sheet, default) or 3D-printed (rigid tiles + thickness).
+ */
+export function buildScene(fold: FoldFile, material: SimMaterial = "vinyl"): BuiltScene | null {
+  const printed = material === "printed";
   if (isFoldable(fold)) {
     // Folds the file's own geometry: cuts split open (kirigami), creases ramp via foldPercent.
     // The importer infers the mode from the file: a file that declares a folded-form footprint
     // (foldedForm frame + fkld:vertices_driven) is driven to it; everything else free-folds.
-    const scene = buildSceneFromFold(fold);
-    if (anyDriven(scene.model.driven)) return { scene, mode: "guided", sim: isFkld(fold) ? "kirigami" : "origami" };
+    const scene = buildSceneFromFold(fold, paramsFor(material), { printed });
+    if (anyDriven(scene.model.driven)) return { scene, mode: "guided", sim: isFkld(fold) ? "kirigami" : "origami", material };
 
     // Foldable FKLD pyramid preset with NO declared footprint (a legacy export): its recoverable
     // N/L/H/T params ARE its declared 3D intent, so guide it via the pyramid recompute as a
-    // fallback. (Newer presets ship a foldedForm and take the faithful path above.)
+    // fallback. (Newer presets ship a foldedForm and take the faithful path above.) The recompute
+    // path does not support printed tiles, so it stays vinyl.
     if (isFkld(fold)) {
       const inputs = pyramidInputsFromFold(fold);
       if (inputs) {
         const guided = buildFoldScene(computeState(inputs));
         if (guided.net.vertices.length === (fold.vertices_coords?.length ?? -1)) {
-          return { scene: guided, mode: "guided", sim: "kirigami" };
+          return { scene: guided, mode: "guided", sim: "kirigami", material: "vinyl" };
         }
       }
     }
-    return { scene, mode: "free", sim: isFkld(fold) ? "kirigami" : "origami" };
+    return { scene, mode: "free", sim: isFkld(fold) ? "kirigami" : "origami", material };
   }
 
   // Not directly foldable, but recognizable as an AKDE pyramid spec → recompute as a last resort.
   const inputs = pyramidInputsFromFold(fold);
-  if (inputs) return { scene: buildFoldScene(computeState(inputs)), mode: "guided", sim: "kirigami" };
+  if (inputs) return { scene: buildFoldScene(computeState(inputs)), mode: "guided", sim: "kirigami", material: "vinyl" };
   return null;
 }

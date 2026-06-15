@@ -68,7 +68,8 @@ describe("view/sim-modal", () => {
     expect(canvasInstances).toHaveLength(1);
     expect(canvasInstances[0]?.setScene).toHaveBeenCalledWith(scene);
     expect(canvasInstances[0]?.start).toHaveBeenCalledTimes(1);
-    expect(canvasInstances[0]?.setFoldPercent).toHaveBeenCalledWith(1);
+    // The modal opens flat (full sheet, all cuts visible); the user folds via the slider.
+    expect(canvasInstances[0]?.setFoldPercent).toHaveBeenCalledWith(0);
 
     const overlay = document.body.children[0]!;
     const slider = overlay.querySelector(".sim-fold-slider")!;

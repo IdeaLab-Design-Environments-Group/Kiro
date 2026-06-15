@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildScene, canSimulate, pyramidInputsFromFold } from "../../../src/sim/scene.js";
+import { printedThetaMax } from "../../../src/sim/index.js";
+import { TILE_COLLIDE_SIGN } from "../../../src/sim/model.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
 
 function loadExample(name: string): FoldFile {
@@ -69,6 +71,42 @@ describe("sim/scene", () => {
     }
     expect(zHi - zLo).toBeGreaterThan(0.2 * (xHi - xLo)); // genuinely 3D, not flat
     expect(Math.min(xHi - xLo, yHi - yLo) / Math.max(xHi - xLo, yHi - yLo)).toBeGreaterThan(0.6); // round-ish
+    for (let i = 0; i < model.position.length; i++) expect(Number.isFinite(model.position[i])).toBe(true);
+  });
+
+  it("printedThetaMax = 2·atan(g/t); thicker tiles (or smaller gaps) close less", () => {
+    expect(printedThetaMax({ thicknessMm: 1.5, gapMm: 0.8 })).toBeCloseTo(2 * Math.atan(0.8 / 1.5), 6);
+    const base = printedThetaMax({ thicknessMm: 1.5, gapMm: 0.8 });
+    expect(printedThetaMax({ thicknessMm: 3, gapMm: 0.8 })).toBeLessThan(base); // thicker → closes less
+    expect(printedThetaMax({ thicknessMm: 1.5, gapMm: 0.4 })).toBeLessThan(base); // smaller gap → closes less
+  });
+
+  it("3D-printed material tags the scene, limits closure per crease, clamps targets, and stays finite", { timeout: 25000 }, () => {
+    const fold = loadExample("akde-hex.fkld");
+
+    // vinyl (default) is untouched: no thickness limit on the creases
+    const vinyl = buildScene(fold);
+    expect(vinyl?.material).toBe("vinyl");
+    expect(vinyl?.scene.model.creases.thetaMax).toBeUndefined();
+
+    // printed: scene tagged, per-crease θ_max set, every design target clamped within it
+    const printed = buildScene(fold, "printed");
+    expect(printed?.material).toBe("printed");
+    expect(printed?.scene.material).toBe("printed");
+    const c = printed!.scene.model.creases;
+    expect(c.thetaMax).toBeDefined();
+    // one-sided closure: targets are capped at θ_max only on the tile-collide side; the fabric side
+    // keeps its full target and may fold past θ_max (asymmetric, not the old symmetric ±θ_max clamp).
+    let sawFreeSide = false;
+    for (let i = 0; i < c.count; i++) {
+      expect(TILE_COLLIDE_SIGN * c.targetTheta[i]).toBeLessThanOrEqual(c.thetaMax![i] + 1e-4);
+      if (Math.abs(c.targetTheta[i]) > c.thetaMax![i] + 1e-4) sawFreeSide = true;
+    }
+    expect(sawFreeSide).toBe(true); // proves the limit is one-sided (free side exceeds θ_max)
+
+    // stability sanity (headless): folding the printed model to full does not blow up
+    const { model, solver } = printed!.scene;
+    solver.solve(8000, 1);
     for (let i = 0; i < model.position.length; i++) expect(Number.isFinite(model.position[i])).toBe(true);
   });
 

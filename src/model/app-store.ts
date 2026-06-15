@@ -8,6 +8,7 @@
  * app/UI state that the three panels and the action buttons read.
  */
 import type { FoldFile, LoadedModel } from "./fold-file.js";
+import type { SimMaterial } from "../sim/index.js";
 
 export type StatusKind = "" | "ok" | "bad";
 
@@ -27,6 +28,8 @@ export interface AppState {
    * `model` when the viewer is empty.
    */
   viewerShown: { object: FoldFile; name: string } | null;
+  /** Which sim material the 3D Sim modal folds: "vinyl" (default) or "printed". */
+  simMaterial: SimMaterial;
 }
 
 export type StateListener = (state: Readonly<AppState>) => void;
@@ -36,6 +39,7 @@ export class AppStore {
     model: null,
     status: { msg: "No model loaded.", kind: "" },
     viewerShown: null,
+    simMaterial: "vinyl",
   };
   private readonly listeners = new Set<StateListener>();
 

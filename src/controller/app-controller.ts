@@ -39,9 +39,12 @@ export class AppController {
     // 3D Sim folds exactly what the VIEWER is showing (fall back to the loaded model). This keeps
     // "what you see is what gets simulated" true even when the viewer and the convert panel differ.
     this.sim.setProvider(() => {
-      const { model, viewerShown } = this.store.getState();
-      return resolveSimScene(model, viewerShown);
+      const { model, viewerShown, simMaterial } = this.store.getState();
+      return resolveSimScene(model, viewerShown, simMaterial);
     });
+    // The sim modal's Vinyl/3D-printed tabs feed the chosen material back into state; the provider
+    // above then rebuilds the scene for that material on the next loadWorld().
+    this.sim.onMaterialChange((material) => this.store.update({ simMaterial: material }));
 
     // SVG export targets the same source — "what you see is what you cut" (black=cut, blue=score).
     this.exporter.setProvider(() => {

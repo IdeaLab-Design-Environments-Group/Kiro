@@ -59,6 +59,12 @@ export interface KirigamizeOptions {
   leafPruning: boolean;
   /** Max δ (rad) for leaf pruning. Default π/4 ≈ 45°. */
   leafPruneDeltaMax: number;
+  /**
+   * After unfolding, drop relief cuts whose removal still flattens the patch
+   * (one piece, no self-overlap). Planned curvature cuts are never touched.
+   * Default true — fewer fabricated cuts at no developability cost.
+   */
+  pruneRelief: boolean;
   /** ε as a fraction of Q's bbox diagonal. */
   epsilonRel: number;
   /** Run the simulator verification (M5). */
@@ -73,6 +79,7 @@ export const DEFAULT_KIRIGAMIZE: KirigamizeOptions = {
   tuckCostScale: 1.0,
   leafPruning: false,
   leafPruneDeltaMax: Math.PI / 4,
+  pruneRelief: true,
   epsilonRel: DEFAULT_VERIFY.epsilonRel,
   verify: true,
   iterations: DEFAULT_VERIFY.iterations,
@@ -115,7 +122,7 @@ export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> =
       .map((x) => x.v);
     let unfold: UnfoldResult;
     try {
-      unfold = seamedUnfold(mesh, topo, plan, defects);
+      unfold = seamedUnfold(mesh, topo, plan, defects, { pruneRelief: opts.pruneRelief });
     } catch (err) {
       if (err instanceof PipelineError && err.stage === "unfold" && tuckSet.length > 0) {
         // Honest scope: tucked δ>0 vertices stay interior, so the patch is not

@@ -20,13 +20,13 @@
  */
 import type { FoldFile } from "../model/fold-file.js";
 import { type CreaseParams, processFold, type WorkFold } from "./fold-ops.js";
-import { type BarHingeModel, DEFAULT_PARAMS, type SolverParams } from "./model.js";
+import { type BarHingeModel, DEFAULT_PARAMS, type SolverParams, TILE_COLLIDE_SIGN } from "./model.js";
 import type { EdgeAssignment, FoldNet, FoldNetEdge } from "./foldnet.js";
 import { FoldSolver, measureTheta } from "./solver.js";
 import { type Vec3, vec3 } from "./vec3.js";
-import type { FoldScene } from "./build.js";
+import type { FoldScene, SimMaterial } from "./build.js";
 
-export type { FoldScene };
+export type { FoldScene, SimMaterial };
 
 /**
  * Origami Simulator material/solver constants (`js/globals.js`): EA 20, crease & panel
@@ -42,6 +42,48 @@ export const ORIGAMI_PARAMS: SolverParams = {
   zeta: 0.85,
   beamDampingScale: 0.5,
 };
+
+/**
+ * 3D-PRINTED kirigami material: rigid tiles + soft fabric hinges. The KEY is the ratio
+ * kFacet/kFace ≫ kFold — faces stay flat planes while only the fold lines articulate. EA is
+ * bumped so panels barely stretch (computeDt auto-shrinks the step, so it stays stable, just
+ * slower). `kGoal` is the soft-driven goal spring and `kBarrier` the thick-hinge closure barrier
+ * (kBarrier ≫ kGoal so contact wins). Only used on the printed path; vinyl keeps ORIGAMI_PARAMS.
+ */
+export const PRINTED_PARAMS: SolverParams = {
+  ...ORIGAMI_PARAMS,
+  EA: 40, // stiffer panels (dt auto-shrinks); modest so the explicit integrator stays stable
+  // The RATIO is what matters: faces (kFacet/kFace) ≫ fold hinges (kFold) ⇒ rigid tiles whose only
+  // bending happens in the soft cloth at the bare hinge lines. Kept modest in absolute terms because
+  // computeDt only tracks axial stiffness — large crease/face/barrier springs would destabilize.
+  kFold: 0.12,
+  kFacet: 1.0,
+  kFace: 0.5,
+  zeta: 1.0,
+  beamDampingScale: 0.8,
+  kGoal: 0.6,
+  kBarrier: 1.5,
+};
+
+/** Fabrication geometry for the printed thickness limit (mm). */
+export interface PrintedParams {
+  /** Tile thickness (printed wall, mm). */
+  thicknessMm: number;
+  /** Bare-fabric hinge gap between tiles at a fold line (mm). */
+  gapMm: number;
+}
+export const DEFAULT_PRINTED: PrintedParams = { thicknessMm: 1.2, gapMm: 1.0 };
+
+/**
+ * Max fold angle θ toward the TILE side (θ=0 flat) before two rigid tiles of thickness t on one
+ * face, bridged by a bare-cloth hinge gap g, collide: θ_max = 2·atan(g/t). Thinner tiles or wider
+ * gaps fold more (t→0 ⇒ θ_max→π; g→0 ⇒ θ_max→0). Scale-invariant (depends only on g/t). One-sided:
+ * the fabric-backing side has no such limit and folds freely (see TILE_COLLIDE_SIGN).
+ */
+export function printedThetaMax(p: PrintedParams): number {
+  const t = Math.max(p.thicknessMm, 1e-6);
+  return 2 * Math.atan(p.gapMm / t);
+}
 
 /** True when a fold file has the vertices/faces/edges needed to simulate. */
 export function isFoldable(fold: FoldFile): boolean {
@@ -352,21 +394,37 @@ function applyDeclaredGoal(fold: FoldFile, work: WorkFold, model: BarHingeModel)
   return true;
 }
 
-/** Build a renderer-facing FoldNet (vertices/faces/edges + meta) from the assembled model. */
-function netFromModel(work: WorkFold, model: BarHingeModel): FoldNet {
+/**
+ * Build a renderer-facing FoldNet (vertices/faces/edges + meta) from the assembled model.
+ *
+ * `cutPairs` holds the ORIGINAL (pre-split) vertex pairs that were `"C"` cuts, keyed by
+ * `min_max`. `splitCuts` relabels every cut lip to `"B"` so the solver treats it as a free
+ * boundary beam; here we recover the cut identity (via `work.originOf`, which maps each split
+ * vertex back to its source vertex) and re-tag those lips `"C"` so the renderer draws them as
+ * cut lines, not as silhouette. Display only — the solver reads beams/creases, not net edges.
+ */
+function netFromModel(work: WorkFold, model: BarHingeModel, cutPairs: Set<string>): FoldNet {
   const vertices: Vec3[] = [];
   for (let i = 0; i < model.numNodes; i++) {
     vertices.push(vec3(model.position[3 * i], model.position[3 * i + 1], model.position[3 * i + 2]));
   }
   const faces = work.faces_vertices.map((f) => [f[0], f[1], f[2]] as [number, number, number]);
+  const origin = work.originOf;
   const edges: FoldNetEdge[] = [];
   for (let i = 0; i < work.edges_vertices.length; i++) {
     const a = work.edges_vertices[i][0];
     const b = work.edges_vertices[i][1];
+    let assignment = mapAssignment(work.edges_assignment[i]);
+    if (assignment === "B" && origin && cutPairs.size) {
+      const oa = origin[a], ob = origin[b];
+      if (oa != null && ob != null && cutPairs.has(oa < ob ? `${oa}_${ob}` : `${ob}_${oa}`)) {
+        assignment = "C";
+      }
+    }
     edges.push({
       a: Math.min(a, b),
       b: Math.max(a, b),
-      assignment: mapAssignment(work.edges_assignment[i]),
+      assignment,
       rest: model.beams.rest[i],
       faces: [],
     });
@@ -391,6 +449,10 @@ function netFromModel(work: WorkFold, model: BarHingeModel): FoldNet {
  *  to keep the welded-seam fold its goal frames were authored against. */
 export interface BuildSceneOptions {
   splitCuts?: boolean;
+  /** 3D-printed mode: rigid tiles + thickness-limited closure. Default false (vinyl). */
+  printed?: boolean;
+  /** Printed thickness/gap (mm); defaults to the file's meta or DEFAULT_PRINTED. */
+  printedParams?: PrintedParams;
 }
 
 export function buildSceneFromFold(
@@ -408,11 +470,87 @@ export function buildSceneFromFold(
     faces_vertices: (fold.faces_vertices as number[][]).map((f) => f.slice()),
   };
 
+  // Original cut edges (pre-split, source vertex indices) so the renderer can re-tag the lips
+  // `splitCuts` flattens to `"B"` back to `"C"` — see netFromModel.
+  const cutPairs = new Set<string>();
+  const origEdges = fold.edges_vertices as number[][] | undefined;
+  const origAssign = fold.edges_assignment as string[] | undefined;
+  if (origEdges && origAssign) {
+    for (let i = 0; i < origEdges.length; i++) {
+      if (origAssign[i] !== "C") continue;
+      const [a, b] = origEdges[i];
+      cutPairs.add(a < b ? `${a}_${b}` : `${b}_${a}`);
+    }
+  }
+
   const { fold: processed, creaseParams } = processFold(work, { splitCuts: opts.splitCuts ?? true });
   const model = assembleModel(processed, creaseParams, params);
   // Adaptive: drive a declared folded-form footprint if the file states one; else free fold.
-  applyDeclaredGoal(fold, processed, model);
-  const net = netFromModel(processed, model);
+  const driven = applyDeclaredGoal(fold, processed, model);
+
+  // 3D-printed: rigid tiles can't close past the thickness limit. Set per-crease θ_max + clamp
+  // the design targets (handles free-fold patterns); for driven files additionally relax the goal
+  // pose so the kinematically-pinned hinges physically open to ≤ θ_max.
+  if (opts.printed) {
+    const pp = opts.printedParams ?? printedParamsFromMeta(fold) ?? DEFAULT_PRINTED;
+    applyPrintedClosure(model, pp);
+    if (driven) relaxPrintedGoal(model);
+  }
+
+  const net = netFromModel(processed, model, cutPairs);
   const solver = new FoldSolver(model);
-  return { net, model, solver };
+  return { net, model, solver, material: opts.printed ? "printed" : "vinyl" };
+}
+
+/** Read printed thickness from the file's architecture meta, if present (gap stays default). */
+function printedParamsFromMeta(fold: FoldFile): PrintedParams | null {
+  const arch = (fold as Record<string, unknown>)["fkld:meta_architecture"] as
+    | { materialThickness?: number }
+    | undefined;
+  const t = arch?.materialThickness;
+  return typeof t === "number" && t > 0 ? { thicknessMm: t, gapMm: DEFAULT_PRINTED.gapMm } : null;
+}
+
+/**
+ * Set each crease's thickness limit θ_max (printed mode) and clamp its design target on the
+ * tile-collide side only. The tiles sit on one face (the +normal side, `TILE_COLLIDE_SIGN`), so
+ * folding toward them is capped at θ_max while the fabric-backing side keeps its full target and
+ * folds freely (one-sided closure; the runtime barrier in `forces.ts` enforces the same side).
+ */
+function applyPrintedClosure(model: BarHingeModel, pp: PrintedParams): void {
+  const thetaMax = printedThetaMax(pp);
+  const c = model.creases;
+  c.thetaMax = new Float32Array(c.count);
+  for (let i = 0; i < c.count; i++) {
+    c.thetaMax[i] = thetaMax;
+    if (TILE_COLLIDE_SIGN * c.targetTheta[i] > thetaMax) c.targetTheta[i] = TILE_COLLIDE_SIGN * thetaMax;
+  }
+}
+
+/**
+ * Build-time goal relaxation for driven (guided) printed files: the declared goal pose may close
+ * hinges past θ_max (it was authored thickness-free). Soft-drive from the goal with the thick-hinge
+ * barriers active, settle, and freeze the result as the new goal — so the runtime hard-drive lands
+ * on a thickness-respecting pose where tiles stop short of colliding. Keeps the live loop stable.
+ */
+function relaxPrintedGoal(model: BarHingeModel): void {
+  const savedFixed = model.fixed.slice();
+  const savedPos = model.position.slice();
+  const savedVel = model.velocity.slice();
+
+  for (let i = 0; i < model.numNodes; i++) if (model.driven[i]) model.fixed[i] = 0; // unpin
+  model.softDriven = true;
+  model.position.set(model.goal);
+  model.velocity.fill(0);
+
+  const solver = new FoldSolver(model);
+  solver.foldPercent = 1;
+  solver.solveUntilSettled({ maxIters: 3000, keEps: 1e-7, quench: true, guard: true });
+
+  model.goal.set(model.position); // relaxed, thickness-respecting goal
+
+  model.softDriven = false; // runtime drives hard to the relaxed goal
+  model.fixed.set(savedFixed);
+  model.position.set(savedPos);
+  model.velocity.set(savedVel);
 }

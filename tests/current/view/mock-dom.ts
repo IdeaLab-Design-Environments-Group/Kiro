@@ -133,6 +133,11 @@ export class MockElement {
     }
     return childrenByTag(this, selector)[0] ?? null;
   }
+
+  querySelectorAll(selector: string): MockElement[] {
+    if (selector.startsWith(".")) return childrenByClass(this, selector.slice(1));
+    return childrenByTag(this, selector);
+  }
 }
 
 export class MockDocument {
@@ -193,6 +198,13 @@ export function childByClass(root: MockElement, className: string): MockElement 
     if (found) return found;
   }
   return undefined;
+}
+
+export function childrenByClass(root: MockElement, className: string): MockElement[] {
+  const out: MockElement[] = [];
+  if (root.className.split(/\s+/).includes(className)) out.push(root);
+  for (const child of root.children) out.push(...childrenByClass(child, className));
+  return out;
 }
 
 export function childByData(root: MockElement, key: string, value: string): MockElement | undefined {
