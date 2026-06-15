@@ -1,4 +1,5 @@
 import type { FoldScene, SimMaterial } from "../sim/index.js";
+import { DEFAULT_MAX_SUBDIV } from "../model/tile-subdiv.js";
 import type { SimCanvas } from "./sim-canvas.js";
 
 /** Returns a ready fold scene when the sim opens, or null when no model is loaded. */
@@ -17,11 +18,16 @@ export class SimModal {
   private readonly statusEl: HTMLElement;
   private readonly foldSlider: HTMLInputElement;
   private readonly foldValue: HTMLElement;
+  private readonly detailControl: HTMLElement;
+  private readonly detailSlider: HTMLInputElement;
+  private readonly detailValue: HTMLElement;
   private readonly tabs: HTMLButtonElement[];
   private provider: SimSceneProvider | null = null;
   private canvas: SimCanvas | null = null;
   private material: SimMaterial = "vinyl";
+  private detail = DEFAULT_MAX_SUBDIV;
   private materialListener: ((m: SimMaterial) => void) | null = null;
+  private detailListener: ((d: number) => void) | null = null;
 
   constructor() {
     this.trigger = document.createElement("button");
@@ -54,6 +60,10 @@ export class SimModal {
         </div>
         <footer class="sim-modal-footer">
           <span class="sim-status"></span>
+          <label class="sim-fold-control sim-detail-control" title="More tile subdivision on harder-folding faces (0 = uniform). Matches the STL export.">
+            Detail <span class="sim-detail-value">2</span>
+            <input type="range" class="sim-detail-slider" min="0" max="4" step="1" value="2" />
+          </label>
           <label class="sim-fold-control">
             Fold <span class="sim-fold-value">0%</span>
             <input type="range" class="sim-fold-slider" min="0" max="100" step="1" value="0" />
@@ -67,12 +77,17 @@ export class SimModal {
     this.statusEl = this.overlay.querySelector(".sim-status")!;
     this.foldSlider = this.overlay.querySelector(".sim-fold-slider")!;
     this.foldValue = this.overlay.querySelector(".sim-fold-value")!;
+    this.detailControl = this.overlay.querySelector(".sim-detail-control")!;
+    this.detailSlider = this.overlay.querySelector(".sim-detail-slider")!;
+    this.detailValue = this.overlay.querySelector(".sim-detail-value")!;
     this.tabs = Array.from(this.overlay.querySelectorAll<HTMLButtonElement>(".sim-tab"));
     for (const tab of this.tabs) {
       tab.addEventListener("click", () => this.selectMaterial(tab.dataset.material as SimMaterial));
     }
 
     this.foldSlider.addEventListener("input", () => this.applyFold());
+    this.detailSlider.addEventListener("input", () => this.applyDetail());
+    this.syncDetailVisibility();
     this.overlay.querySelector(".sim-modal-close")!.addEventListener("click", () => this.close());
     this.overlay.querySelector(".sim-reset-btn")!.addEventListener("click", () => this.loadWorld());
     this.overlay.addEventListener("click", (e) => {
@@ -96,6 +111,11 @@ export class SimModal {
     this.materialListener = cb;
   }
 
+  /** Notified when the user changes the adaptive-detail slider (controller stores it; export shares it). */
+  onDetailChange(cb: (d: number) => void): void {
+    this.detailListener = cb;
+  }
+
   /** Switch the sim material tab: update state, then rebuild the scene (fold % is preserved). */
   private selectMaterial(m: SimMaterial): void {
     if (m === this.material) return;
@@ -105,8 +125,21 @@ export class SimModal {
       tab.classList.toggle("is-active", on);
       tab.setAttribute("aria-selected", String(on));
     }
+    this.syncDetailVisibility(); // detail only affects the 3D-printed tiles
     this.materialListener?.(m); // update the store before rebuilding so the provider sees the new material
     if (this.canvas) this.loadWorld();
+  }
+
+  /** The detail slider only matters for 3D-printed tiles — hide it in vinyl/paper mode. */
+  private syncDetailVisibility(): void {
+    this.detailControl.hidden = this.material !== "printed";
+  }
+
+  private applyDetail(): void {
+    this.detail = Number(this.detailSlider.value);
+    this.detailValue.textContent = String(this.detail);
+    this.canvas?.setTileDetail(this.detail);
+    this.detailListener?.(this.detail);
   }
 
   /** Enable/disable the 3D Sim button (e.g. only when a foldable model is loaded). */
@@ -140,6 +173,8 @@ export class SimModal {
     if (!this.canvas) return;
     try {
       this.canvas.setScene(built.scene);
+      this.canvas.setTileDetail(this.detail); // honor the current adaptive-detail setting
+      this.syncDetailVisibility();
       this.applyFold();
       this.canvas.warmToTarget();
       this.canvas.start();

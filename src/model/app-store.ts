@@ -9,6 +9,7 @@
  */
 import type { FoldFile, LoadedModel } from "./fold-file.js";
 import type { SimMaterial } from "../sim/index.js";
+import { DEFAULT_MAX_SUBDIV } from "./tile-subdiv.js";
 
 export type StatusKind = "" | "ok" | "bad";
 
@@ -30,6 +31,8 @@ export interface AppState {
   viewerShown: { object: FoldFile; name: string } | null;
   /** Which sim material the 3D Sim modal folds: "vinyl" (default) or "printed". */
   simMaterial: SimMaterial;
+  /** Fold-adaptive tile detail cap, shared by the 3D-printed sim render and the STL export. */
+  simDetail: number;
 }
 
 export type StateListener = (state: Readonly<AppState>) => void;
@@ -40,6 +43,7 @@ export class AppStore {
     status: { msg: "No model loaded.", kind: "" },
     viewerShown: null,
     simMaterial: "vinyl",
+    simDetail: DEFAULT_MAX_SUBDIV,
   };
   private readonly listeners = new Set<StateListener>();
 

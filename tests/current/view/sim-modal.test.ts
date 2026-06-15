@@ -8,6 +8,7 @@ const canvasInstances: Array<{
   stop: ReturnType<typeof vi.fn>;
   setScene: ReturnType<typeof vi.fn>;
   setFoldPercent: ReturnType<typeof vi.fn>;
+  setTileDetail: ReturnType<typeof vi.fn>;
   warmToTarget: ReturnType<typeof vi.fn>;
 }> = [];
 
@@ -18,6 +19,7 @@ vi.mock("../../../src/view/sim-canvas.js", () => ({
     readonly stop = vi.fn();
     readonly setScene = vi.fn();
     readonly setFoldPercent = vi.fn();
+    readonly setTileDetail = vi.fn();
     readonly warmToTarget = vi.fn();
 
     constructor(mount: MockElement) {

@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
+import { type BaryTri, DEFAULT_MAX_SUBDIV, foldDepths, subdivBary, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 
 /**
  * Three.js viewport for the forward fold — renders the FoldNet as lit triangle faces plus
@@ -37,8 +38,7 @@ const COLOR_CLOTH = 0x5a5048;
 const COLOR_HINGE = 0xb08d57;
 /** Printed tile thickness as a fraction of the model's bbox diagonal (visual; physics is ratio-based). */
 const TILE_THICK_FRAC = 0.018;
-/** Each rigid tile is shrunk this fraction toward its centroid, exposing the bare-cloth hinge strips. */
-const TILE_INSET_FRAC = 0.16;
+// `TILE_INSET_FRAC` (tile shrink toward centroid) is shared with the STL export via `tile-subdiv.ts`.
 
 const STEPS_PER_FRAME = 40;
 const GUIDED_STEPS_PER_FRAME = 80;
@@ -77,10 +77,14 @@ export class SimCanvas {
   private posAttr: THREE.BufferAttribute | null = null;
   // 3D-printed thick-tile layer (rebuilt each frame from the live folded positions).
   private material: SimMaterial = "vinyl";
+  private net: FoldNet | null = null; // kept so a detail change can rebuild the tiles without a full reload
   private thickGeo: THREE.BufferGeometry | null = null;
   private thickPos: Float32Array | null = null;
   private thickAttr: THREE.BufferAttribute | null = null;
+  private thickMesh: THREE.Mesh | null = null;
   private tileFaces: number[] | null = null;
+  private tileBary: BaryTri[][] | null = null; // per face: its sub-tiles (fold-adaptive) in barycentric coords
+  private tileDetail = DEFAULT_MAX_SUBDIV; // max adaptive subdivision; shared with the STL export
   private tileT = 0; // one-sided extrude thickness (model units)
   private tileSign: Float32Array | null = null; // per-face ±1: extrude side, made consistent across mixed winding
   private foldPercent = 0;
@@ -136,6 +140,8 @@ export class SimCanvas {
     this.disposeGeo();
     this.fold = scene;
     const { net, model } = scene;
+    this.net = net;
+    this.thickMesh = null; // disposeGeo()/group.clear() dropped the old tile mesh
     this.material = scene.material ?? "vinyl";
 
     this.guided = anyDriven(model.driven);
@@ -399,6 +405,14 @@ export class SimCanvas {
     // the cloth surface mesh stays at the plane as the backing. (Was centered ±thick/2.)
     this.tileT = diag * TILE_THICK_FRAC;
 
+    // A detail change rebuilds just this layer — drop the previous tile mesh first.
+    if (this.thickMesh) {
+      this.group.remove(this.thickMesh);
+      this.thickGeo?.dispose();
+      (this.thickMesh.material as THREE.Material).dispose();
+      this.thickMesh = null;
+    }
+
     this.tileFaces = net.faces.flat();
     const nTris = this.tileFaces.length / 3;
     // Kirigamized meshes can have mixed face winding (some faces' raw normals point the opposite
@@ -423,7 +437,13 @@ export class SimCanvas {
         this.tileSign[i] = nx * mx + ny * my + nz * mz >= 0 ? 1 : -1;
       }
     }
-    this.thickPos = new Float32Array(nTris * 21 * 3); // 7 tris (top + 3 side quads) × 3 verts each
+    // Fold-adaptive subdivision: faces touching harder folds split into more sub-tiles (shared with
+    // the STL export via tile-subdiv). Each triangle's sub-tiles are coplanar — purely visual res.
+    const depth = this.printedFaceDepths(net);
+    this.tileBary = depth.map((d) => subdivBary(d));
+    const totalSub = this.tileBary.reduce((n, b) => n + b.length, 0);
+
+    this.thickPos = new Float32Array(totalSub * 21 * 3); // 7 tris (top + 3 side quads) × 3 verts each
     this.thickGeo = new THREE.BufferGeometry();
     this.thickAttr = new THREE.BufferAttribute(this.thickPos, 3);
     this.thickAttr.setUsage(THREE.DynamicDrawUsage);
@@ -435,55 +455,84 @@ export class SimCanvas {
       metalness: 0.0,
       roughness: 0.6,
     });
-    this.group.add(new THREE.Mesh(this.thickGeo, mat));
+    this.thickMesh = new THREE.Mesh(this.thickGeo, mat);
+    this.group.add(this.thickMesh);
     this.updatePrintedTiles();
   }
 
-  /** Refill the printed-tile vertex buffer from the current folded positions. */
+  /** Per-face subdivision depth from the design fold angles, matching the STL export's metric. */
+  private printedFaceDepths(net: FoldNet): number[] {
+    const c = this.fold!.model.creases;
+    const score = new Array<number>(net.faces.length).fill(0);
+    for (let i = 0; i < c.count; i++) {
+      const m = Math.abs(c.targetTheta[i]);
+      const f1 = c.face1[i], f2 = c.face2[i];
+      if (f1 >= 0 && f1 < score.length) score[f1] = Math.max(score[f1], m);
+      if (f2 >= 0 && f2 < score.length) score[f2] = Math.max(score[f2], m);
+    }
+    return foldDepths(score, this.tileDetail);
+  }
+
+  /** Set the fold-adaptive detail cap (shared with the export) and rebuild the printed tiles. */
+  setTileDetail(cap: number): void {
+    const v = Math.max(0, Math.floor(cap));
+    if (v === this.tileDetail) return;
+    this.tileDetail = v;
+    if (this.material === "printed" && this.net) this.buildPrintedTiles(this.net);
+  }
+
+  /** Refill the printed-tile vertex buffer from the current folded positions (one prism per sub-tile). */
   private updatePrintedTiles(): void {
     const faces = this.tileFaces;
+    const bary = this.tileBary;
     const out = this.thickPos;
-    if (!faces || !out || !this.fold) return;
+    if (!faces || !bary || !out || !this.fold) return;
     const p = this.fold.model.position;
     const t = this.tileT;
     let o = 0;
-    const push = (x: number, y: number, z: number): void => {
-      out[o++] = x; out[o++] = y; out[o++] = z;
+    const push = (v: [number, number, number]): void => {
+      out[o++] = v[0]; out[o++] = v[1]; out[o++] = v[2];
     };
-    for (let f = 0; f < faces.length; f += 3) {
+    for (let f = 0, fi = 0; f < faces.length; f += 3, fi++) {
       const a = faces[f] * 3, b = faces[f + 1] * 3, c = faces[f + 2] * 3;
       const ax = p[a], ay = p[a + 1], az = p[a + 2];
       const bx = p[b], by = p[b + 1], bz = p[b + 2];
       const cx = p[c], cy = p[c + 1], cz = p[c + 2];
-      const gx = (ax + bx + cx) / 3, gy = (ay + by + cy) / 3, gz = (az + bz + cz) / 3;
-      // face normal
+      // face normal (shared by all sub-tiles — a triangle face is planar), pinned to the one-sided face
       let nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
       let ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
       let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
       const nl = Math.hypot(nx, ny, nz) || 1;
-      const sgn = this.tileSign ? this.tileSign[f / 3] : 1; // pin to the consistent (one-sided) face
+      const sgn = this.tileSign ? this.tileSign[fi] : 1;
       nx = (nx / nl) * sgn; ny = (ny / nl) * sgn; nz = (nz / nl) * sgn;
-      // shrink each corner a fixed fraction toward the centroid (scale-free; exposes the bare-cloth
-      // hinge strip between tiles), then offset along the normal → top plate at +t, bottom plate at
-      // the hinge plane (s=0): the tile sits on ONE side, with the cloth surface as its backing.
-      const corner = (x: number, y: number, z: number, s: number): [number, number, number] => {
-        const ix = x + (gx - x) * TILE_INSET_FRAC;
-        const iy = y + (gy - y) * TILE_INSET_FRAC;
-        const iz = z + (gz - z) * TILE_INSET_FRAC;
-        return [ix + nx * s, iy + ny * s, iz + nz * s];
-      };
-      // top plate at +t along the normal; the wall bases sit at the hinge plane (s = 0).
-      const t0 = corner(ax, ay, az, t), t1 = corner(bx, by, bz, t), t2 = corner(cx, cy, cz, t);
-      const b0 = corner(ax, ay, az, 0), b1 = corner(bx, by, bz, 0), b2 = corner(cx, cy, cz, 0);
-      // top plate + 3 side quads. NO bottom plate: it sat coincident on the cloth plane (s = 0) and
-      // z-fought the fabric backing, showing as 3D-print artifacts on the underside of the cloth.
-      // The cloth mesh is the tile's backing, so the open bottom is hidden behind it.
-      push(...t0); push(...t1); push(...t2);
-      const tops = [t0, t1, t2], bots = [b0, b1, b2];
-      for (let e = 0; e < 3; e++) {
-        const j = (e + 1) % 3;
-        push(...bots[e]); push(...bots[j]); push(...tops[j]);
-        push(...bots[e]); push(...tops[j]); push(...tops[e]);
+      // Each sub-tile's corner = barycentric blend of the live face corners.
+      const at = (w: [number, number, number]): [number, number, number] => [
+        w[0] * ax + w[1] * bx + w[2] * cx,
+        w[0] * ay + w[1] * by + w[2] * cy,
+        w[0] * az + w[1] * bz + w[2] * cz,
+      ];
+      for (const tri of bary[fi]) {
+        const v0 = at(tri[0]), v1 = at(tri[1]), v2 = at(tri[2]);
+        const gx = (v0[0] + v1[0] + v2[0]) / 3, gy = (v0[1] + v1[1] + v2[1]) / 3, gz = (v0[2] + v1[2] + v2[2]) / 3;
+        // shrink each corner toward the sub-tile centroid (exposes the bare-cloth hinge strip), then
+        // offset along the normal → top plate at +t, wall bases at the hinge plane (s=0), one-sided.
+        const corner = (v: [number, number, number], s: number): [number, number, number] => {
+          const ix = v[0] + (gx - v[0]) * TILE_INSET_FRAC;
+          const iy = v[1] + (gy - v[1]) * TILE_INSET_FRAC;
+          const iz = v[2] + (gz - v[2]) * TILE_INSET_FRAC;
+          return [ix + nx * s, iy + ny * s, iz + nz * s];
+        };
+        const t0 = corner(v0, t), t1 = corner(v1, t), t2 = corner(v2, t);
+        const b0 = corner(v0, 0), b1 = corner(v1, 0), b2 = corner(v2, 0);
+        // top plate + 3 side quads. NO bottom plate: it sat coincident on the cloth plane and z-fought
+        // the fabric backing; the cloth mesh is the backing, so the open bottom is hidden behind it.
+        push(t0); push(t1); push(t2);
+        const tops = [t0, t1, t2], bots = [b0, b1, b2];
+        for (let e = 0; e < 3; e++) {
+          const j = (e + 1) % 3;
+          push(bots[e]); push(bots[j]); push(tops[j]);
+          push(bots[e]); push(tops[j]); push(tops[e]);
+        }
       }
     }
     this.thickAttr!.needsUpdate = true;
@@ -531,7 +580,9 @@ export class SimCanvas {
     this.thickGeo = null;
     this.thickPos = null;
     this.thickAttr = null;
+    this.thickMesh = null;
     this.tileFaces = null;
+    this.tileBary = null;
     this.cpu = null;
     this.faceMat = null;
     this.creaseLines = [];

@@ -400,6 +400,10 @@ body {
   font-size: 0.8rem;
 }
 
+.sim-detail-control[hidden] {
+  display: none;
+}
+
 .sim-fold-control {
   display: flex;
   align-items: center;

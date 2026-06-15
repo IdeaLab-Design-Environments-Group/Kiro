@@ -10,7 +10,7 @@
  * Coordinates are the flat pattern `vertices_coords` (z = 0 base); n-gon faces are fan-triangulated.
  */
 import type { FoldFile } from "./fold-file.js";
-import { type BaryTri, DEFAULT_MAX_SUBDIV, foldDepths, subdivBary, TILE_INSET_FRAC } from "./tile-subdiv.js";
+import { DEFAULT_MAX_SUBDIV, foldDepths, subdivBary, TILE_INSET_FRAC } from "./tile-subdiv.js";
 
 export interface StlExport {
   filename: string;
@@ -156,21 +156,6 @@ function faceNormal(face: number[], coords: number[][]): V3 {
 }
 
 const edgeKey = (a: number, b: number): string => (a < b ? `${a},${b}` : `${b},${a}`);
-
-/** Recursive 4-way midpoint subdivision of a triangle to the given depth. */
-function subdivide(tri: [V3, V3, V3], depth: number): [V3, V3, V3][] {
-  if (depth <= 0) return [tri];
-  const [a, b, c] = tri;
-  const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a);
-  return [
-    ...subdivide([a, ab, ca], depth - 1),
-    ...subdivide([ab, b, bc], depth - 1),
-    ...subdivide([ca, bc, c], depth - 1),
-    ...subdivide([ab, bc, ca], depth - 1),
-  ];
-}
-
-const mid = (a: V3, b: V3): V3 => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
 
 /** Shrink each corner toward the triangle centroid so the tile separates from its neighbours. */
 function insetToCentroid(tri: [V3, V3, V3]): [V3, V3, V3] {

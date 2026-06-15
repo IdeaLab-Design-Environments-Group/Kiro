@@ -46,16 +46,20 @@ export class AppController {
     // The sim modal's Vinyl/3D-printed tabs feed the chosen material back into state; the provider
     // above then rebuilds the scene for that material on the next loadWorld().
     this.sim.onMaterialChange((material) => this.store.update({ simMaterial: material }));
+    // The sim's adaptive-detail slider is the shared source of truth: store it so the STL export
+    // defaults to the same detail — "what you see is what you print".
+    this.sim.onDetailChange((detail) => this.store.update({ simDetail: detail }));
 
     // SVG export targets the same source — "what you see is what you cut" (black=cut, blue=score).
     this.exporter.setProvider(() => {
       const { model, viewerShown } = this.store.getState();
       return resolveSvgExport(model, viewerShown);
     });
-    // STL export of the separated, extruded 3D-printed tiles — height + fold-adaptive detail from menu.
+    // STL export of the separated, extruded 3D-printed tiles. Height from the menu; detail defaults to
+    // the sim's shared `simDetail` (null = "use the sim's setting") so export and sim render match.
     this.exporter.setStlProvider((heightUnits, maxSubdiv) => {
-      const { model, viewerShown } = this.store.getState();
-      return resolveStlExport(model, viewerShown, heightUnits, maxSubdiv);
+      const { model, viewerShown, simDetail } = this.store.getState();
+      return resolveStlExport(model, viewerShown, heightUnits, maxSubdiv ?? simDetail);
     });
 
     // The viewer can load models on its own (file picker, example dropdown, drag-drop); record
