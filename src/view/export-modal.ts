@@ -1,7 +1,10 @@
 import type { SvgExportPayload } from "../model/fkld-svg-export.js";
+import type { StlExport } from "../model/stl-export.js";
 
 /** Returns the export payload for the current pattern when the modal opens, or null if none. */
 export type ExportProvider = () => SvgExportPayload | null;
+/** Builds the STL (3D-printed tiles) at the given tile height (model units) and adaptive-detail cap. */
+export type StlProvider = (heightUnits: number | null, maxSubdiv: number | null) => StlExport | null;
 
 /**
  * "Export SVG" trigger + modal for vinyl/Cricut cutting. Opening pulls a fresh {@link SvgExportPayload}
@@ -16,14 +19,19 @@ export class ExportModal {
   private readonly previews: { cut: HTMLElement; score: HTMLElement; both: HTMLElement };
   private readonly zipBtn: HTMLButtonElement;
   private readonly combinedBtn: HTMLButtonElement;
+  private readonly stlBtn: HTMLButtonElement;
+  private readonly stlHeightInput: HTMLInputElement;
+  private readonly stlHeightUnit: HTMLElement;
+  private readonly stlDetailInput: HTMLInputElement;
   private provider: ExportProvider | null = null;
+  private stlProvider: StlProvider | null = null;
   private payload: SvgExportPayload | null = null;
 
   constructor() {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "Export SVG";
+    this.trigger.textContent = "Export";
     this.trigger.disabled = true;
     this.trigger.addEventListener("click", () => this.open());
 
@@ -31,9 +39,9 @@ export class ExportModal {
     this.overlay.className = "sim-overlay";
     this.overlay.hidden = true;
     this.overlay.innerHTML = `
-      <div class="sim-modal" role="dialog" aria-modal="true" aria-label="Export SVG for cutting">
+      <div class="sim-modal" role="dialog" aria-modal="true" aria-label="Export pattern and mesh">
         <header class="sim-modal-header">
-          <span class="sim-modal-title">Export SVG (cut + score)</span>
+          <span class="sim-modal-title">Export — SVG (cut + score) · STL (3D-printed tiles)</span>
           <button type="button" class="sim-modal-close" aria-label="Close">×</button>
         </header>
         <div class="sim-modal-body">
@@ -47,6 +55,14 @@ export class ExportModal {
           <span class="sim-status"></span>
           <button type="button" class="export-zip-btn">Cut + score (zip)</button>
           <button type="button" class="export-combined-btn">Single SVG</button>
+          <label class="export-stl-height-label">Tile height
+            <input type="number" class="export-stl-height" min="0" step="0.1" />
+            <span class="export-stl-unit">units</span>
+          </label>
+          <label class="export-stl-height-label" title="More subdivision on harder-folding faces (0 = uniform)">Detail
+            <input type="number" class="export-stl-detail" min="0" max="4" step="1" />
+          </label>
+          <button type="button" class="export-stl-btn">Tiles (STL)</button>
         </footer>
       </div>
     `;
@@ -59,9 +75,14 @@ export class ExportModal {
     };
     this.zipBtn = this.overlay.querySelector(".export-zip-btn")!;
     this.combinedBtn = this.overlay.querySelector(".export-combined-btn")!;
+    this.stlBtn = this.overlay.querySelector(".export-stl-btn")!;
+    this.stlHeightInput = this.overlay.querySelector(".export-stl-height")!;
+    this.stlHeightUnit = this.overlay.querySelector(".export-stl-unit")!;
+    this.stlDetailInput = this.overlay.querySelector(".export-stl-detail")!;
 
     this.zipBtn.addEventListener("click", () => this.downloadZip());
     this.combinedBtn.addEventListener("click", () => this.downloadCombined());
+    this.stlBtn.addEventListener("click", () => this.downloadStl());
     this.overlay.querySelector(".sim-modal-close")!.addEventListener("click", () => this.close());
     this.overlay.addEventListener("click", (e) => {
       if (e.target === this.overlay) this.close();
@@ -79,6 +100,10 @@ export class ExportModal {
     this.provider = provider;
   }
 
+  setStlProvider(provider: StlProvider): void {
+    this.stlProvider = provider;
+  }
+
   /** Enable/disable the Export button (only when there's a cuttable pattern on screen). */
   setEnabled(enabled: boolean): void {
     this.trigger.disabled = !enabled;
@@ -86,10 +111,20 @@ export class ExportModal {
 
   open(): void {
     this.payload = this.provider?.() ?? null;
+    // Probe the STL at the model's defaults to prefill the menu inputs and enable the button.
+    const stlDefault = this.stlProvider?.(null, null) ?? null;
+    this.stlBtn.disabled = !stlDefault; // the tiles export independently of the cut pattern
+    if (stlDefault) {
+      this.stlHeightInput.value = String(Math.round(stlDefault.height * 100) / 100);
+      this.stlHeightUnit.textContent = stlDefault.unit;
+      this.stlDetailInput.value = String(stlDefault.maxSubdiv);
+    }
     this.overlay.hidden = false;
     if (!this.payload) {
       this.previews.cut.innerHTML = this.previews.score.innerHTML = this.previews.both.innerHTML = "";
-      this.statusEl.textContent = "No pattern to export — load or kirigamize a model first.";
+      this.statusEl.textContent = stlDefault
+        ? "No cut pattern, but the 3D-printed tiles are exportable as STL."
+        : "No pattern to export — load or kirigamize a model first.";
       this.zipBtn.disabled = this.combinedBtn.disabled = true;
       return;
     }
@@ -113,6 +148,16 @@ export class ExportModal {
   private downloadCombined(): void {
     if (!this.payload) return;
     download(this.payload.combined.filename, new Blob([this.payload.combined.svg], { type: "image/svg+xml" }));
+  }
+
+  private downloadStl(): void {
+    const rawH = parseFloat(this.stlHeightInput.value);
+    const height = Number.isFinite(rawH) && rawH > 0 ? rawH : null; // null → builder's default
+    const rawD = parseInt(this.stlDetailInput.value, 10);
+    const detail = Number.isFinite(rawD) && rawD >= 0 ? rawD : null; // null → builder's default
+    const stl = this.stlProvider?.(height, detail) ?? null;
+    if (!stl) return;
+    download(stl.filename, new Blob([stl.text], { type: "model/stl" }));
   }
 }
 

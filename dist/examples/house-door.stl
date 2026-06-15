@@ -1,0 +1,170 @@
+solid house_door
+ facet normal 0.000000 -1.000000 0.000000
+  outer loop
+   vertex 0.000000 0.000000 0.000000
+   vertex 0.420000 0.000000 0.000000
+   vertex 0.420000 0.000000 0.550000
+  endloop
+ endfacet
+ facet normal 0.000000 -1.000000 0.000000
+  outer loop
+   vertex 0.000000 0.000000 0.000000
+   vertex 0.420000 0.000000 0.550000
+   vertex 0.000000 0.000000 0.550000
+  endloop
+ endfacet
+ facet normal 0.000000 -1.000000 0.000000
+  outer loop
+   vertex 0.780000 0.000000 0.000000
+   vertex 1.200000 0.000000 0.000000
+   vertex 1.200000 0.000000 0.550000
+  endloop
+ endfacet
+ facet normal 0.000000 -1.000000 0.000000
+  outer loop
+   vertex 0.780000 0.000000 0.000000
+   vertex 1.200000 0.000000 0.550000
+   vertex 0.780000 0.000000 0.550000
+  endloop
+ endfacet
+ facet normal 0.000000 -1.000000 0.000000
+  outer loop
+   vertex 0.000000 0.000000 0.550000
+   vertex 0.420000 0.000000 0.550000
+   vertex 0.000000 0.000000 0.800000
+  endloop
+ endfacet
+ facet normal 0.000000 -1.000000 0.000000
+  outer loop
+   vertex 0.000000 0.000000 0.800000
+   vertex 0.420000 0.000000 0.550000
+   vertex 0.600000 0.000000 1.300000
+  endloop
+ endfacet
+ facet normal 0.000000 -1.000000 0.000000
+  outer loop
+   vertex 0.600000 0.000000 1.300000
+   vertex 0.420000 0.000000 0.550000
+   vertex 0.780000 0.000000 0.550000
+  endloop
+ endfacet
+ facet normal 0.000000 -1.000000 0.000000
+  outer loop
+   vertex 0.600000 0.000000 1.300000
+   vertex 0.780000 0.000000 0.550000
+   vertex 1.200000 0.000000 0.800000
+  endloop
+ endfacet
+ facet normal 0.000000 -1.000000 0.000000
+  outer loop
+   vertex 1.200000 0.000000 0.800000
+   vertex 0.780000 0.000000 0.550000
+   vertex 1.200000 0.000000 0.550000
+  endloop
+ endfacet
+ facet normal -0.939693 -0.342020 0.000000
+  outer loop
+   vertex 0.420000 0.000000 0.000000
+   vertex 0.543127 -0.338289 0.000000
+   vertex 0.543127 -0.338289 0.550000
+  endloop
+ endfacet
+ facet normal -0.939693 -0.342020 0.000000
+  outer loop
+   vertex 0.420000 0.000000 0.000000
+   vertex 0.543127 -0.338289 0.550000
+   vertex 0.420000 0.000000 0.550000
+  endloop
+ endfacet
+ facet normal 0.000000 1.000000 0.000000
+  outer loop
+   vertex 0.000000 1.000000 0.000000
+   vertex 1.200000 1.000000 0.800000
+   vertex 1.200000 1.000000 0.000000
+  endloop
+ endfacet
+ facet normal 0.000000 1.000000 0.000000
+  outer loop
+   vertex 0.000000 1.000000 0.000000
+   vertex 0.600000 1.000000 1.300000
+   vertex 1.200000 1.000000 0.800000
+  endloop
+ endfacet
+ facet normal 0.000000 1.000000 0.000000
+  outer loop
+   vertex 0.000000 1.000000 0.000000
+   vertex 0.000000 1.000000 0.800000
+   vertex 0.600000 1.000000 1.300000
+  endloop
+ endfacet
+ facet normal -1.000000 0.000000 0.000000
+  outer loop
+   vertex 0.000000 0.000000 0.550000
+   vertex 0.000000 1.000000 0.000000
+   vertex 0.000000 0.000000 0.000000
+  endloop
+ endfacet
+ facet normal -1.000000 0.000000 0.000000
+  outer loop
+   vertex 0.000000 0.000000 0.550000
+   vertex 0.000000 1.000000 0.800000
+   vertex 0.000000 1.000000 0.000000
+  endloop
+ endfacet
+ facet normal -1.000000 0.000000 0.000000
+  outer loop
+   vertex 0.000000 0.000000 0.550000
+   vertex 0.000000 0.000000 0.800000
+   vertex 0.000000 1.000000 0.800000
+  endloop
+ endfacet
+ facet normal 1.000000 0.000000 0.000000
+  outer loop
+   vertex 1.200000 0.000000 0.550000
+   vertex 1.200000 0.000000 0.000000
+   vertex 1.200000 1.000000 0.000000
+  endloop
+ endfacet
+ facet normal 1.000000 0.000000 0.000000
+  outer loop
+   vertex 1.200000 0.000000 0.550000
+   vertex 1.200000 1.000000 0.000000
+   vertex 1.200000 1.000000 0.800000
+  endloop
+ endfacet
+ facet normal 1.000000 0.000000 0.000000
+  outer loop
+   vertex 1.200000 0.000000 0.550000
+   vertex 1.200000 1.000000 0.800000
+   vertex 1.200000 0.000000 0.800000
+  endloop
+ endfacet
+ facet normal -0.640184 0.000000 0.768221
+  outer loop
+   vertex 0.000000 0.000000 0.800000
+   vertex 0.600000 1.000000 1.300000
+   vertex 0.000000 1.000000 0.800000
+  endloop
+ endfacet
+ facet normal -0.640184 0.000000 0.768221
+  outer loop
+   vertex 0.000000 0.000000 0.800000
+   vertex 0.600000 0.000000 1.300000
+   vertex 0.600000 1.000000 1.300000
+  endloop
+ endfacet
+ facet normal 0.640184 0.000000 0.768221
+  outer loop
+   vertex 0.600000 0.000000 1.300000
+   vertex 1.200000 1.000000 0.800000
+   vertex 0.600000 1.000000 1.300000
+  endloop
+ endfacet
+ facet normal 0.640184 0.000000 0.768221
+  outer loop
+   vertex 0.600000 0.000000 1.300000
+   vertex 1.200000 0.000000 0.800000
+   vertex 1.200000 1.000000 0.800000
+  endloop
+ endfacet
+endsolid house_door

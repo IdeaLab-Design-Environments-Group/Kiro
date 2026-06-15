@@ -62,7 +62,13 @@ export interface KirigamizeOptions {
   /**
    * After unfolding, drop relief cuts whose removal still flattens the patch
    * (one piece, no self-overlap). Planned curvature cuts are never touched.
-   * Default true — fewer fabricated cuts at no developability cost.
+   *
+   * Default FALSE: measured headroom is small (the relief loop is already
+   * near-minimal — relief edges are usually individually load-bearing, so
+   * single-edge removal rarely succeeds) and each pruning trial is a full
+   * re-cut+re-unfold, which is costly on the tangled saddle patches that carry
+   * the most relief. Opt in (and rely on PRUNE_MAX_TRIALS) when minimizing
+   * fabricated cut count matters more than solve time.
    */
   pruneRelief: boolean;
   /** ε as a fraction of Q's bbox diagonal. */
@@ -79,7 +85,7 @@ export const DEFAULT_KIRIGAMIZE: KirigamizeOptions = {
   tuckCostScale: 1.0,
   leafPruning: false,
   leafPruneDeltaMax: Math.PI / 4,
-  pruneRelief: true,
+  pruneRelief: false,
   epsilonRel: DEFAULT_VERIFY.epsilonRel,
   verify: true,
   iterations: DEFAULT_VERIFY.iterations,

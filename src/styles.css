@@ -385,6 +385,21 @@ body {
   color: #555;
 }
 
+.export-stl-height-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: #333;
+  white-space: nowrap;
+}
+
+.export-stl-height {
+  width: 4.5rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.8rem;
+}
+
 .sim-fold-control {
   display: flex;
   align-items: center;

@@ -144,7 +144,7 @@ function makeScene({ driven = false }: { driven?: boolean } = {}) {
     velocity: new Float32Array(position.length),
     driven: new Uint8Array(driven ? [1, 0, 0] : [0, 0, 0]),
   } as any;
-  const solver = { foldPercent: 0, step: vi.fn() } as any;
+  const solver = { foldPercent: 0, step: vi.fn(), enableCollision: vi.fn() } as any;
   return {
     net: {
       faces: [[0, 1, 2]],

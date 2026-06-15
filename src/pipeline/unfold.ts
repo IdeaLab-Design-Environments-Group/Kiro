@@ -46,6 +46,16 @@ export const RELIEF_MAX = 64;
  */
 const PRUNE_MAX_PASSES = 4;
 
+/**
+ * Hard cap on pruning TRIALS (each = a full re-cut + re-unfold + overlap test).
+ * Bounds worst-case cost regardless of mesh: on tangled patches the relief set
+ * is large AND each unfold is expensive, so without this the pruning pass can
+ * dominate runtime. Measured headroom is small (relief edges are usually
+ * load-bearing), so an early cap costs little — see `pruneRelief` (off by
+ * default in DEFAULT_KIRIGAMIZE for exactly this reason).
+ */
+const PRUNE_MAX_TRIALS = 256;
+
 /** Relative tolerance for the developability audit (per edge length). */
 const AUDIT_REL = 1e-6;
 
@@ -1083,9 +1093,12 @@ function pruneReliefEdges(
   // Relief edges still in the cut set (tier-3 swaps may have dropped some).
   const kept = reliefEdges.filter((e) => cutSet.has(e));
   let removed = 0;
-  for (let pass = 0; pass < PRUNE_MAX_PASSES; pass++) {
+  let trials = 0;
+  outer: for (let pass = 0; pass < PRUNE_MAX_PASSES; pass++) {
     let removedThisPass = 0;
     for (let i = kept.length - 1; i >= 0; i--) {
+      if (trials >= PRUNE_MAX_TRIALS) break outer; // cost guard
+      trials++;
       const e = kept[i];
       const trialEdges = [...cutSet].filter((x) => x !== e);
       if (developsCleanly(mesh, topo, trialEdges, ventAngles)) {

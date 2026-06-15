@@ -16,6 +16,7 @@ import { loadedStatus, readModelFile, fetchSample } from "../services/model-load
 import { kirigamizeMesh, createAkdePyramid } from "../services/pattern-service.js";
 import { resolveSimScene } from "../services/sim-scene-service.js";
 import { resolveSvgExport } from "../services/svg-export-service.js";
+import { resolveStlExport } from "../services/stl-export-service.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { MetadataPanel } from "../view/metadata-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
@@ -50,6 +51,11 @@ export class AppController {
     this.exporter.setProvider(() => {
       const { model, viewerShown } = this.store.getState();
       return resolveSvgExport(model, viewerShown);
+    });
+    // STL export of the separated, extruded 3D-printed tiles — height + fold-adaptive detail from menu.
+    this.exporter.setStlProvider((heightUnits, maxSubdiv) => {
+      const { model, viewerShown } = this.store.getState();
+      return resolveStlExport(model, viewerShown, heightUnits, maxSubdiv);
     });
 
     // The viewer can load models on its own (file picker, example dropdown, drag-drop); record
