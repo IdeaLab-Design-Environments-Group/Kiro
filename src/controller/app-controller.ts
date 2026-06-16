@@ -61,6 +61,13 @@ export class AppController {
       const { model, viewerShown, simDetail } = this.store.getState();
       return resolveStlExport(model, viewerShown, heightUnits, maxSubdiv ?? simDetail);
     });
+    // Circuit (traces + SMD parts) authored in the 3D Sim → its OWN STL, separate from the tiles.
+    this.exporter.setCircuitProvider(() => {
+      const { model, viewerShown } = this.store.getState();
+      const name = viewerShown?.name ?? (model?.kind === "fold" ? model.name : null);
+      const base = (name ?? "kirigami").replace(/\.(fkld|fold|json|stl|obj)$/i, "") || "kirigami";
+      return this.sim.getCircuitStl(base);
+    });
 
     // The viewer can load models on its own (file picker, example dropdown, drag-drop); record
     // what it shows in the store so sim enablement/provider derive from one source of truth.

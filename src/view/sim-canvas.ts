@@ -3,6 +3,8 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
 import { type BaryTri, DEFAULT_MAX_SUBDIV, foldDepths, subdivBary, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
+import { type Circuit, type ComponentKind, EMPTY_CIRCUIT } from "../model/circuit.js";
+import { resolveCircuit } from "../model/circuit-geometry.js";
 
 /**
  * Three.js viewport for the forward fold — renders the FoldNet as lit triangle faces plus
@@ -39,6 +41,8 @@ const COLOR_HINGE = 0xb08d57;
 /** Printed tile thickness as a fraction of the model's bbox diagonal (visual; physics is ratio-based). */
 const TILE_THICK_FRAC = 0.018;
 // `TILE_INSET_FRAC` (tile shrink toward centroid) is shared with the STL export via `tile-subdiv.ts`.
+/** Copper-trace overlay line (drawn on top so routing reads against the tiles). */
+const COPPER_LINE = new THREE.LineBasicMaterial({ color: 0xc87533, depthTest: false, transparent: true });
 
 const STEPS_PER_FRAME = 40;
 const GUIDED_STEPS_PER_FRAME = 80;
@@ -87,6 +91,24 @@ export class SimCanvas {
   private tileDetail = DEFAULT_MAX_SUBDIV; // max adaptive subdivision; shared with the STL export
   private tileT = 0; // one-sided extrude thickness (model units)
   private tileSign: Float32Array | null = null; // per-face ±1: extrude side, made consistent across mixed winding
+  // Legal hinge bridges: little printed straps tying adjacent tiles across each interior (2-face)
+  // edge — i.e. the M/V/F hinges. Cuts are split into 1-face boundary edges, so they get NO bridge
+  // and stay open (bridging a cut would lock the kirigami mechanism).
+  private bridgeList: [number, number, number, number][] | null = null; // [face1, face2, edgeV0, edgeV1]
+  private bridgePos: Float32Array | null = null;
+  private bridgeGeo: THREE.BufferGeometry | null = null;
+  private bridgeAttr: THREE.BufferAttribute | null = null;
+  private bridgeMesh: THREE.Mesh | null = null;
+  // Circuit overlay: SMD parts + traces placed on the tiles, riding the fold (see model/circuit*).
+  private readonly circuitGroup = new THREE.Group();
+  private circuit: Circuit = EMPTY_CIRCUIT;
+  private circuitMode = false;
+  private circuitTool: ComponentKind | null = null;
+  private circuitId = 0;
+  private pickMesh: THREE.Mesh | null = null; // invisible folded faces; raycast target for placement
+  private pickPos: Float32Array | null = null;
+  private downPt: { x: number; y: number } | null = null;
+  private circuitListener: ((c: Circuit) => void) | null = null;
   private foldPercent = 0;
   // Open at the flat full sheet (0): the kirigamized body is first shown as the complete
   // paper with every cut line visible, then the user drives the fold slider up to the target.
@@ -131,6 +153,11 @@ export class SimCanvas {
     fillLight.position.set(-1, 1, 0.5);
     this.scene.add(fillLight);
     this.scene.add(this.group);
+    this.scene.add(this.circuitGroup);
+
+    const dom = this.renderer.domElement;
+    dom.addEventListener("pointerdown", (e) => { this.downPt = { x: e.clientX, y: e.clientY }; });
+    dom.addEventListener("pointerup", (e) => this.onPointerUp(e));
 
     this.loop = this.loop.bind(this);
   }
@@ -142,6 +169,7 @@ export class SimCanvas {
     const { net, model } = scene;
     this.net = net;
     this.thickMesh = null; // disposeGeo()/group.clear() dropped the old tile mesh
+    this.bridgeMesh = null;
     this.material = scene.material ?? "vinyl";
 
     this.guided = anyDriven(model.driven);
@@ -231,6 +259,13 @@ export class SimCanvas {
 
     // Printed: thick rigid tiles drawn on top of the fabric backing, rebuilt each frame.
     if (this.material === "printed") this.buildPrintedTiles(net);
+
+    // Circuit overlay: invisible folded-faces pick mesh for placement, and a fresh (empty) circuit.
+    this.buildPickMesh(net);
+    this.circuit = EMPTY_CIRCUIT;
+    this.circuitId = 0;
+    this.circuitListener?.(this.circuit);
+    this.updateCircuitOverlay();
 
     // CPU reference solver for all modes (guided AKDE presets are verified on this path).
     this.cpu = scene.solver;
@@ -383,6 +418,8 @@ export class SimCanvas {
     this.geo?.computeVertexNormals();
     if (this.molMesh?.visible) this.molGeo?.computeVertexNormals();
     if (this.material === "printed") this.updatePrintedTiles();
+    this.syncPickMesh();
+    if (this.circuit.components.length > 0) this.updateCircuitOverlay();
   }
 
   /**
@@ -405,12 +442,18 @@ export class SimCanvas {
     // the cloth surface mesh stays at the plane as the backing. (Was centered ±thick/2.)
     this.tileT = diag * TILE_THICK_FRAC;
 
-    // A detail change rebuilds just this layer — drop the previous tile mesh first.
+    // A detail change rebuilds just this layer — drop the previous tile + bridge meshes first.
     if (this.thickMesh) {
       this.group.remove(this.thickMesh);
       this.thickGeo?.dispose();
       (this.thickMesh.material as THREE.Material).dispose();
       this.thickMesh = null;
+    }
+    if (this.bridgeMesh) {
+      this.group.remove(this.bridgeMesh);
+      this.bridgeGeo?.dispose();
+      (this.bridgeMesh.material as THREE.Material).dispose();
+      this.bridgeMesh = null;
     }
 
     this.tileFaces = net.faces.flat();
@@ -457,7 +500,98 @@ export class SimCanvas {
     });
     this.thickMesh = new THREE.Mesh(this.thickGeo, mat);
     this.group.add(this.thickMesh);
+    this.buildBridges(net);
     this.updatePrintedTiles();
+  }
+
+  /**
+   * Set up the legal-bridge layer: a little strap across each interior hinge edge. A bridge is
+   * placed only on an edge that is BOTH shared by two faces AND assigned M/V/F (a real fold or
+   * facet hinge). Cut ("C") and boundary ("B") edges get NO bridge — bridging a cut would lock the
+   * kirigami mechanism. (Topology alone is insufficient: a cut can still read as a 2-face edge here,
+   * so we gate on the assignment too.)
+   */
+  private buildBridges(net: FoldNet): void {
+    const assign = new Map<string, string>();
+    for (const e of net.edges) {
+      const k = e.a < e.b ? `${e.a}_${e.b}` : `${e.b}_${e.a}`;
+      assign.set(k, e.assignment);
+    }
+    const edgeFaces = new Map<string, number[]>();
+    for (let fi = 0; fi < net.faces.length; fi++) {
+      const f = net.faces[fi];
+      const pairs: [number, number][] = [[f[0], f[1]], [f[1], f[2]], [f[2], f[0]]];
+      for (const [u, v] of pairs) {
+        const key = u < v ? `${u}_${v}` : `${v}_${u}`;
+        const list = edgeFaces.get(key);
+        if (list) list.push(fi);
+        else edgeFaces.set(key, [fi]);
+      }
+    }
+    const bridges: [number, number, number, number][] = [];
+    for (const [key, fs] of edgeFaces) {
+      if (fs.length !== 2) continue; // boundary / split cut → keep open, no bridge
+      const a = assign.get(key);
+      if (a !== "M" && a !== "V" && a !== "F") continue; // only legal hinges (never C / B)
+      const u = key.indexOf("_");
+      bridges.push([fs[0], fs[1], Number(key.slice(0, u)), Number(key.slice(u + 1))]);
+    }
+    this.bridgeList = bridges;
+    this.bridgePos = new Float32Array(bridges.length * 18); // 2 tris × 3 verts × 3
+    this.bridgeGeo = new THREE.BufferGeometry();
+    this.bridgeAttr = new THREE.BufferAttribute(this.bridgePos, 3);
+    this.bridgeAttr.setUsage(THREE.DynamicDrawUsage);
+    this.bridgeGeo.setAttribute("position", this.bridgeAttr);
+    const mat = new THREE.MeshStandardMaterial({
+      color: COLOR_TILE, side: THREE.DoubleSide, flatShading: true, metalness: 0.0, roughness: 0.6,
+    });
+    this.bridgeMesh = new THREE.Mesh(this.bridgeGeo, mat);
+    this.group.add(this.bridgeMesh);
+  }
+
+  /** Refill the bridge straps from the live folded positions (rebuilt each frame like the tiles). */
+  private updateBridges(): void {
+    const list = this.bridgeList, out = this.bridgePos, faces = this.tileFaces;
+    if (!list || !out || !faces || !this.fold || !this.tileSign) return;
+    const p = this.fold.model.position;
+    const t = this.tileT;
+    const W = 0.16; // half-width of each strap along its edge (fraction of edge length)
+    const frame = (fi: number): { gx: number; gy: number; gz: number; nx: number; ny: number; nz: number } => {
+      const f = fi * 3;
+      const a = faces[f] * 3, b = faces[f + 1] * 3, c = faces[f + 2] * 3;
+      const ax = p[a], ay = p[a + 1], az = p[a + 2];
+      const bx = p[b], by = p[b + 1], bz = p[b + 2];
+      const cx = p[c], cy = p[c + 1], cz = p[c + 2];
+      const gx = (ax + bx + cx) / 3, gy = (ay + by + cy) / 3, gz = (az + bz + cz) / 3;
+      let nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+      let ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+      let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      const s = this.tileSign![fi];
+      return { gx, gy, gz, nx: (nx / nl) * s, ny: (ny / nl) * s, nz: (nz / nl) * s };
+    };
+    // Inset toward the face centroid like a tile, then lift to the tile top (+t): the strap meets
+    // the two tiles at their top surfaces, spanning the bare-hinge gap between them.
+    const insetTop = (x: number, y: number, z: number, fr: ReturnType<typeof frame>): [number, number, number] => {
+      const ix = x + (fr.gx - x) * TILE_INSET_FRAC, iy = y + (fr.gy - y) * TILE_INSET_FRAC, iz = z + (fr.gz - z) * TILE_INSET_FRAC;
+      return [ix + fr.nx * t, iy + fr.ny * t, iz + fr.nz * t];
+    };
+    let o = 0;
+    const push = (v: [number, number, number]): void => { out[o++] = v[0]; out[o++] = v[1]; out[o++] = v[2]; };
+    for (const [f1, f2, v0, v1] of list) {
+      const a0 = v0 * 3, b0 = v1 * 3;
+      const ax = p[a0], ay = p[a0 + 1], az = p[a0 + 2];
+      const dx = p[b0] - ax, dy = p[b0 + 1] - ay, dz = p[b0 + 2] - az;
+      const at = (s: number): [number, number, number] => [ax + dx * s, ay + dy * s, az + dz * s];
+      const lo = at(0.5 - W), hi = at(0.5 + W);
+      const fr1 = frame(f1), fr2 = frame(f2);
+      const c1 = insetTop(lo[0], lo[1], lo[2], fr1), c2 = insetTop(hi[0], hi[1], hi[2], fr1);
+      const c3 = insetTop(hi[0], hi[1], hi[2], fr2), c4 = insetTop(lo[0], lo[1], lo[2], fr2);
+      push(c1); push(c2); push(c3);
+      push(c1); push(c3); push(c4);
+    }
+    this.bridgeAttr!.needsUpdate = true;
+    this.bridgeGeo!.computeVertexNormals();
   }
 
   /** Per-face subdivision depth from the design fold angles, matching the STL export's metric. */
@@ -537,6 +671,116 @@ export class SimCanvas {
     }
     this.thickAttr!.needsUpdate = true;
     this.thickGeo!.computeVertexNormals();
+    this.updateBridges();
+  }
+
+  // --- Circuit overlay ------------------------------------------------------
+
+  /** Enter/exit circuit-placement mode (clicks on tiles drop the selected part). */
+  setCircuitMode(on: boolean): void {
+    this.circuitMode = on;
+  }
+
+  /** Which SMD part the next click places (null = none). */
+  setCircuitTool(kind: ComponentKind | null): void {
+    this.circuitTool = kind;
+  }
+
+  /** Notified whenever the circuit changes (controller mirrors it into the store for export). */
+  onCircuitChange(cb: (c: Circuit) => void): void {
+    this.circuitListener = cb;
+  }
+
+  getCircuit(): Circuit {
+    return this.circuit;
+  }
+
+  getNet(): FoldNet | null {
+    return this.net;
+  }
+
+  clearCircuit(): void {
+    this.circuit = { components: [], traces: [] };
+    this.circuitId = 0;
+    this.circuitListener?.(this.circuit);
+    this.updateCircuitOverlay();
+  }
+
+  /** Invisible indexed mesh of the folded faces — raycast target that maps a hit straight to a face. */
+  private buildPickMesh(net: FoldNet): void {
+    this.pickPos = new Float32Array(net.vertices.length * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(this.pickPos, 3));
+    geo.setIndex(net.faces.flat());
+    this.pickMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ visible: false }));
+    this.pickMesh.frustumCulled = false;
+    this.group.add(this.pickMesh);
+    this.syncPickMesh();
+  }
+
+  private syncPickMesh(): void {
+    if (!this.pickPos || !this.pickMesh || !this.fold) return;
+    this.pickPos.set(this.fold.model.position.subarray(0, this.pickPos.length));
+    (this.pickMesh.geometry.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
+  }
+
+  private onPointerUp(e: PointerEvent): void {
+    const down = this.downPt;
+    this.downPt = null;
+    if (!down || !this.circuitMode || !this.circuitTool || !this.pickMesh || !this.net || !this.fold) return;
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return; // a drag (orbit), not a click
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const hit = ray.intersectObject(this.pickMesh, false)[0];
+    if (!hit || hit.faceIndex == null) return;
+    this.placeComponent(hit.faceIndex, hit.point);
+  }
+
+  /** Drop the selected part at a hit, snapped to the face by barycentric coords; chain a trace. */
+  private placeComponent(face: number, point: THREE.Vector3): void {
+    const p = this.fold!.model.position;
+    const f = this.net!.faces[face];
+    const bary = baryAt(point, p, f);
+    const id = `c${++this.circuitId}`;
+    const prev = this.circuit.components[this.circuit.components.length - 1];
+    const components = [...this.circuit.components, { id, kind: this.circuitTool!, face, bary, rot: 0 }];
+    const traces = [...this.circuit.traces];
+    if (prev) traces.push({ id: `t${this.circuitId}`, from: { comp: prev.id, pad: 1 }, to: { comp: id, pad: 0 } });
+    this.circuit = { components, traces };
+    this.circuitListener?.(this.circuit);
+    this.updateCircuitOverlay();
+  }
+
+  /** Rebuild the circuit overlay (part boxes + trace lines) at the current fold. */
+  private updateCircuitOverlay(): void {
+    this.circuitGroup.clear();
+    if (!this.net || !this.fold || this.circuit.components.length === 0) return;
+    const pos = this.fold.model.position;
+    const geo = resolveCircuit(this.circuit, this.net, (i) => [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]]);
+    const bodyH = 0.03 * geo.scale;
+    for (const c of geo.components) {
+      const box = new THREE.Mesh(
+        new THREE.BoxGeometry(c.len, c.wid, bodyH),
+        new THREE.MeshStandardMaterial({ color: c.color, metalness: 0.1, roughness: 0.6 }),
+      );
+      const m = new THREE.Matrix4().makeBasis(
+        new THREE.Vector3(...c.x), new THREE.Vector3(...c.y), new THREE.Vector3(...c.n),
+      );
+      m.setPosition(c.center[0] + c.n[0] * bodyH / 2, c.center[1] + c.n[1] * bodyH / 2, c.center[2] + c.n[2] * bodyH / 2);
+      box.applyMatrix4(m);
+      this.circuitGroup.add(box);
+    }
+    for (const t of geo.traces) {
+      const lineGeo = new THREE.BufferGeometry().setFromPoints(
+        t.path.map((p) => new THREE.Vector3(p[0], p[1], p[2])),
+      );
+      this.circuitGroup.add(new THREE.Line(lineGeo, COPPER_LINE));
+    }
   }
 
   /**
@@ -581,14 +825,36 @@ export class SimCanvas {
     this.thickPos = null;
     this.thickAttr = null;
     this.thickMesh = null;
+    this.bridgeGeo?.dispose();
+    this.bridgeGeo = null;
+    this.bridgePos = null;
+    this.bridgeAttr = null;
+    this.bridgeMesh = null;
+    this.bridgeList = null;
     this.tileFaces = null;
     this.tileBary = null;
+    this.circuitGroup.clear();
+    this.pickMesh = null;
+    this.pickPos = null;
     this.cpu = null;
     this.faceMat = null;
     this.creaseLines = [];
     this.shellCapable = false;
     this.shellDisplayed = false;
   }
+}
+
+/** Barycentric coords of a world point within a folded face (node-index triple into `position`). */
+function baryAt(point: THREE.Vector3, position: Float32Array, f: [number, number, number]): [number, number, number] {
+  const a = new THREE.Vector3(position[3 * f[0]], position[3 * f[0] + 1], position[3 * f[0] + 2]);
+  const b = new THREE.Vector3(position[3 * f[1]], position[3 * f[1] + 1], position[3 * f[1] + 2]);
+  const c = new THREE.Vector3(position[3 * f[2]], position[3 * f[2] + 1], position[3 * f[2] + 2]);
+  const v0 = b.clone().sub(a), v1 = c.clone().sub(a), v2 = point.clone().sub(a);
+  const d00 = v0.dot(v0), d01 = v0.dot(v1), d11 = v1.dot(v1), d20 = v2.dot(v0), d21 = v2.dot(v1);
+  const den = d00 * d11 - d01 * d01 || 1e-12;
+  const v = (d11 * d20 - d01 * d21) / den;
+  const w = (d00 * d21 - d01 * d20) / den;
+  return [1 - v - w, v, w];
 }
 
 /** AKDE uniform pyramid: N lateral tris + 6N molecule tris = 7N faces. */
