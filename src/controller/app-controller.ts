@@ -23,6 +23,7 @@ import {
 import { resolveSimScene } from "../services/sim-scene-service.js";
 import { resolveSvgExport } from "../services/svg-export-service.js";
 import { resolveStlExport } from "../services/stl-export-service.js";
+import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { MetadataPanel } from "../view/metadata-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
@@ -81,11 +82,12 @@ export class AppController {
       const { model, viewerShown } = this.store.getState();
       return resolveSvgExport(model, viewerShown);
     });
-    // STL export of the separated, extruded 3D-printed tiles. Height from the menu; detail defaults to
-    // the sim's shared `simDetail` (null = "use the sim's setting") so export and sim render match.
-    this.exporter.setStlProvider((heightUnits, maxSubdiv) => {
+    // STL export of the foldable printed-joinery tiles (inset tiles + thin hinges). Height from the
+    // menu; gap from the sim's shared `simTileGap` so export and sim render match; `DEFAULT_PRINT_SIZE`
+    // scales the unit-scale flat pattern to a printable mm sheet (else the export is sub-millimetre).
+    this.exporter.setStlProvider((heightUnits, maxSubdiv, printSizeMm) => {
       const { model, viewerShown, simDetail, simTileGap } = this.store.getState();
-      return resolveStlExport(model, viewerShown, heightUnits, maxSubdiv ?? simDetail, simTileGap);
+      return resolveStlExport(model, viewerShown, heightUnits, maxSubdiv ?? simDetail, simTileGap, printSizeMm ?? DEFAULT_PRINT_SIZE);
     });
     // Circuit (traces + SMD parts) authored in the 3D Sim → its OWN STL, separate from the tiles.
     this.exporter.setCircuitProvider(() => {

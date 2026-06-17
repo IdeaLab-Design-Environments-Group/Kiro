@@ -58,12 +58,17 @@ class ViewerFrameMock {
 
 class HeaderActionsMock {
   createPyramidHandler: (() => void) | null = null;
+  create25dHandler: (() => void) | null = null;
   loadSampleHandler: (() => void) | null = null;
   kirigamizeHandler: (() => void) | null = null;
   enabledCalls: boolean[] = [];
 
   onCreatePyramid(handler: () => void): void {
     this.createPyramidHandler = handler;
+  }
+
+  onCreate25d(handler: () => void): void {
+    this.create25dHandler = handler;
   }
 
   onLoadSample(handler: () => void): void {
@@ -86,6 +91,7 @@ class SimModalMock {
   enabledCalls: boolean[] = [];
   materialListener: ((m: unknown) => void) | null = null;
   detailListener: ((d: number) => void) | null = null;
+  gapListener: ((g: number) => void) | null = null;
 
   setProvider(provider: SimProvider): void {
     this.provider = provider;
@@ -101,6 +107,10 @@ class SimModalMock {
 
   onDetailChange(cb: (d: number) => void): void {
     this.detailListener = cb;
+  }
+
+  onGapChange(cb: (g: number) => void): void {
+    this.gapListener = cb;
   }
 
   onSaveCircuit(cb: () => void): void {

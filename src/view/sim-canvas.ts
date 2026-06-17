@@ -124,17 +124,11 @@ export class SimCanvas {
   private tileInset = TILE_INSET_FRAC; // gap: tile shrink toward centroid (the "Gap" slider); shared with export
   private tileT = 0; // one-sided extrude thickness (model units)
   private tileSign: Float32Array | null = null; // per-face ±1: extrude side, made consistent across mixed winding
-  // PyKirigami "separate bricks joined at edges/corners" look: each logical tile is a full brick, and
-  // every JOIN shows a visible seam/gap. Per net-tri, per edge:
-  //  • MERGE (true): a shared FACET ("F") edge — internal to one logical tile → no wall, kept full.
-  //  • SEAM  (true): an M/V fold-hinge or a "C" cut — a real join → tile recedes (the seam/gap) + wall.
-  //  • otherwise: boundary → kept full + wall (clean outer side). Recomputed on the live mesh.
-  private tileEdgeMerge: boolean[][] | null = null;
-  private tileEdgeSeam: boolean[][] | null = null;
-  // Per net-tri, which of its three CORNERS is a shared pivot (≥2 tiles meet at the point, off any
-  // shared edge — rotating-units kirigami). Kept FULL so the bricks join there at the corner (the
-  // spherical-joint / Kiri-Spoon ligament).
-  private tilePivotCorner: boolean[][] | null = null;
+  // Foldable printed joinery (see model/printed-joinery.ts): a gap opens around every tile so the
+  // sheet folds up (rotating units). Per net-tri edge, true iff it is interior (shared 2-face) or a
+  // "C" cut → its midpoint pinches inward to open the gap; the export bridges the fold gaps with thin
+  // living hinges. Tile CORNERS always stay full = the pinpoint pivots.
+  private tileEdgePinch: boolean[][] | null = null;
   // Circuit overlay: SMD parts + traces placed on the tiles, riding the fold (see model/circuit*).
   private readonly circuitGroup = new THREE.Group();
   private circuit: Circuit = EMPTY_CIRCUIT;
@@ -541,45 +535,26 @@ export class SimCanvas {
     const nTris = ff.length / 3;
     const r = this.fold.model.rest;
     // Per-tile extrude side: pin every tile to ONE side vs the mesh's mean (flat) normal so mixed
-    // winding doesn't flip some tiles. And per-tile fold flags: an edge is a fold (kept full) iff it
-    // is shared by two faces AND assigned M/V/F; cut/boundary edges are pulled in (the kirigami opens).
+    // winding doesn't flip some tiles. Plus per-tile pinch flags (`isPinch`) for the foldable layout.
     const edgeFaces = new Map<string, number>();
     net.faces.forEach((f) => {
       for (let k = 0; k < f.length; k++) {
-        const u = f[k], w = f[(k + 1) % f.length], key = u < w ? `${u}_${w}` : `${w}_${u}`;
+        const key = f[k] < f[(k + 1) % f.length] ? `${f[k]}_${f[(k + 1) % f.length]}` : `${f[(k + 1) % f.length]}_${f[k]}`;
         edgeFaces.set(key, (edgeFaces.get(key) ?? 0) + 1);
       }
     });
     const assign = new Map<string, string>();
     for (const e of net.edges) assign.set(e.a < e.b ? `${e.a}_${e.b}` : `${e.b}_${e.a}`, e.assignment);
-    // MERGE = a shared FACET edge (internal to a logical tile): coplanar, no join → no wall, full.
-    const isMerge = (u: number, w: number): boolean => {
+    // FOLDABLE joinery (rotating units, matches the STL export / printed-joinery.ts): a gap is opened
+    // around EVERY tile so it can fold up. PINCH = pull an edge midpoint in to open that gap — done on
+    // every interior edge (shared 2-face) and every "C" cut. The export bridges the fold/facet gaps
+    // with thin living hinges; here we just show the gaps. Tile CORNERS stay full → the pinpoint pivots.
+    const isPinch = (u: number, w: number): boolean => {
       const key = u < w ? `${u}_${w}` : `${w}_${u}`;
-      return (edgeFaces.get(key) ?? 0) >= 2 && assign.get(key) === "F";
+      return (edgeFaces.get(key) ?? 0) >= 2 || assign.get(key) === "C";
     };
-    // SEAM = a real JOIN: an M/V fold hinge or a "C" cut → the tile recedes here (visible seam/gap).
-    const isSeam = (u: number, w: number): boolean => {
-      const a = assign.get(u < w ? `${u}_${w}` : `${w}_${u}`);
-      return a === "M" || a === "V" || a === "C";
-    };
-    // Pivot corners: cluster corners by rest position; a position is a pivot if ≥2 tiles meet there
-    // and NO shared (2-face) edge passes through it (the solver splits shared corners, so go by
-    // position). Those points get a same-colour ligament instead of opening.
-    const q = 1e3;
-    const keyOf = (v: number): string => `${Math.round(r[v * 3] * q)}_${Math.round(r[v * 3 + 1] * q)}_${Math.round(r[v * 3 + 2] * q)}`;
-    const posFaces = new Map<string, Set<number>>();
-    net.faces.forEach((f, fi) => f.forEach((v) => (posFaces.get(keyOf(v)) ?? posFaces.set(keyOf(v), new Set()).get(keyOf(v))!).add(fi)));
-    const onShared = new Set<string>();
-    for (const [key, c] of edgeFaces) {
-      if (c < 2) continue;
-      const u = key.indexOf("_");
-      onShared.add(keyOf(Number(key.slice(0, u)))); onShared.add(keyOf(Number(key.slice(u + 1))));
-    }
-    const isPivot = (v: number): boolean => { const k = keyOf(v); return !onShared.has(k) && (posFaces.get(k)?.size ?? 0) >= 2; };
     this.tileSign = new Float32Array(nTris);
-    this.tileEdgeMerge = [];
-    this.tileEdgeSeam = [];
-    this.tilePivotCorner = [];
+    this.tileEdgePinch = [];
     let mx = 0, my = 0, mz = 0;
     const nrm: number[][] = [];
     for (let f = 0; f < ff.length; f += 3) {
@@ -588,15 +563,14 @@ export class SimCanvas {
       const ny = (r[b + 2] - r[a + 2]) * (r[c] - r[a]) - (r[b] - r[a]) * (r[c + 2] - r[a + 2]);
       const nz = (r[b] - r[a]) * (r[c + 1] - r[a + 1]) - (r[b + 1] - r[a + 1]) * (r[c] - r[a]);
       nrm.push([nx, ny, nz]); mx += nx; my += ny; mz += nz;
-      this.tileEdgeMerge.push([isMerge(ia, ib), isMerge(ib, ic), isMerge(ic, ia)]); // edges AB, BC, CA
-      this.tileEdgeSeam.push([isSeam(ia, ib), isSeam(ib, ic), isSeam(ic, ia)]);
-      this.tilePivotCorner.push([isPivot(ia), isPivot(ib), isPivot(ic)]); // corners A, B, C
+      this.tileEdgePinch.push([isPinch(ia, ib), isPinch(ib, ic), isPinch(ic, ia)]); // edges AB, BC, CA
     }
     for (let i = 0; i < nrm.length; i++) {
       this.tileSign[i] = nrm[i][0] * mx + nrm[i][1] * my + nrm[i][2] * mz >= 0 ? 1 : -1;
     }
 
-    this.thickPos = new Float32Array(nTris * 21 * 3); // 7 tris (top + 3 side quads) × 3 verts each
+    // Each tile is a 6-gon prism (3 corners + 3 edge midpoints): top fan (6 tris) + 6 side quads (12).
+    this.thickPos = new Float32Array(nTris * 18 * 3 * 3);
     this.thickGeo = new THREE.BufferGeometry();
     this.thickAttr = new THREE.BufferAttribute(this.thickPos, 3);
     this.thickAttr.setUsage(THREE.DynamicDrawUsage);
@@ -630,75 +604,54 @@ export class SimCanvas {
   }
 
   /**
-   * Refill the printed-tile buffer from the live folded positions: one full brick per net triangle.
-   * Per-edge: FACET ("F") edges merge (no wall, internal to a logical tile); M/V fold-hinges and "C"
-   * cuts recede by the Gap and get a wall — a visible seam/gap at every JOIN (the PyKirigami look);
-   * boundary edges stay full + walled (clean outer sides). Shared corner pivots stay full (ligament).
+   * Refill the printed-tile buffer (foldable joinery): each net triangle is a 6-gon prism
+   * [A, mAB, B, mBC, C, mCA] extruded +t. Interior + "C" cut edges pinch their midpoint inward to open
+   * a gap around every tile (so the sheet folds up); the export then bridges the fold/facet gaps with
+   * thin living hinges. Corners stay full (the pinpoint pivots). Walls all round (the open bottom is
+   * hidden by the cloth backing).
    */
   private updatePrintedTiles(): void {
-    const faces = this.tileFaces, mergeFlags = this.tileEdgeMerge, seamFlags = this.tileEdgeSeam, pivots = this.tilePivotCorner, out = this.thickPos;
-    if (!faces || !mergeFlags || !seamFlags || !pivots || !out || !this.fold) return;
+    const faces = this.tileFaces, pinchFlags = this.tileEdgePinch, out = this.thickPos;
+    if (!faces || !pinchFlags || !out || !this.fold) return;
     const p = this.fold.model.position;
     const t = this.tileT, inset = this.tileInset, sign = this.tileSign;
     type V = [number, number, number];
-    const sub = (a: V, b: V): V => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    const cross = (a: V, b: V): V => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    const dot = (a: V, b: V): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    // Intersect two coplanar lines (point,dir) in the plane with normal n; null if ~parallel
-    // (relative threshold so it's scale-independent for thin tiles).
-    const meet = (p1: V, d1: V, p2: V, d2: V, n: V): V | null => {
-      const den = dot(cross(d1, d2), n);
-      const scale = (Math.hypot(d1[0], d1[1], d1[2]) * Math.hypot(d2[0], d2[1], d2[2])) || 1;
-      if (Math.abs(den) < 1e-7 * scale) return null;
-      const tt = dot(cross(sub(p2, p1), d2), n) / den;
-      return [p1[0] + d1[0] * tt, p1[1] + d1[1] * tt, p1[2] + d1[2] * tt];
-    };
     let o = 0;
     const push = (v: V): void => { out[o++] = v[0]; out[o++] = v[1]; out[o++] = v[2]; };
     for (let f = 0, fi = 0; f < faces.length; f += 3, fi++) {
       const A: V = [p[faces[f] * 3], p[faces[f] * 3 + 1], p[faces[f] * 3 + 2]];
       const B: V = [p[faces[f + 1] * 3], p[faces[f + 1] * 3 + 1], p[faces[f + 1] * 3 + 2]];
       const C: V = [p[faces[f + 2] * 3], p[faces[f + 2] * 3 + 1], p[faces[f + 2] * 3 + 2]];
-      const raw = cross(sub(B, A), sub(C, A));
-      const nl = Math.hypot(raw[0], raw[1], raw[2]) || 1, s = sign ? sign[fi] : 1;
-      const N: V = [(raw[0] / nl) * s, (raw[1] / nl) * s, (raw[2] / nl) * s];
-      const G: V = [(A[0] + B[0] + C[0]) / 3, (A[1] + B[1] + C[1]) / 3, (A[2] + B[2] + C[2]) / 3];
-      const merge = mergeFlags[fi]; // [AB, BC, CA] — facet edges merge (no wall, full)
-      const seam = seamFlags[fi];   // [AB, BC, CA] — M/V/C joins recede (the seam/gap); boundary stays full
-      // gap distance from this tile's inradius, scaled by the Gap slider (only at cut edges)
-      const peri = Math.hypot(...sub(B, A)) + Math.hypot(...sub(C, B)) + Math.hypot(...sub(A, C)) || 1;
-      const inr = nl / peri; // inradius = 2·area/perimeter, and nl = 2·area
-      const d = inset * inr * 2;
-      const maxMove = 2 * inr; // clamp degenerate (thin-tri) corners so they can't fly off
-      const clamp = (P: V, orig: V): V => {
-        const dl = Math.hypot(P[0] - orig[0], P[1] - orig[1], P[2] - orig[2]);
-        if (dl <= maxMove || dl < 1e-12) return P;
-        const k = maxMove / dl;
-        return [orig[0] + (P[0] - orig[0]) * k, orig[1] + (P[1] - orig[1]) * k, orig[2] + (P[2] - orig[2]) * k];
+      const ux = B[0] - A[0], uy = B[1] - A[1], uz = B[2] - A[2];
+      const vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
+      let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const nl = Math.hypot(nx, ny, nz) || 1, s = sign ? sign[fi] : 1;
+      nx = (nx / nl) * s; ny = (ny / nl) * s; nz = (nz / nl) * s;
+      const Gx = (A[0] + B[0] + C[0]) / 3, Gy = (A[1] + B[1] + C[1]) / 3, Gz = (A[2] + B[2] + C[2]) / 3;
+      const pinch = pinchFlags[fi]; // [AB, BC, CA]
+      // Pinch distance from the tile's inradius (scaled by the Gap) — uniform regardless of tile shape.
+      const peri = Math.hypot(ux, uy, uz) + Math.hypot(C[0] - B[0], C[1] - B[1], C[2] - B[2]) + Math.hypot(A[0] - C[0], A[1] - C[1], A[2] - C[2]) || 1;
+      const d = inset * (nl / peri) * 2; // inradius = 2·area/peri = nl/peri
+      // Edge midpoint pushed PERPENDICULAR to its edge (toward the centroid) by d → opens the empty space.
+      const mid = (P: V, Q: V, doPinch: boolean): V => {
+        const mx = (P[0] + Q[0]) / 2, my = (P[1] + Q[1]) / 2, mz = (P[2] + Q[2]) / 2;
+        if (!doPinch) return [mx, my, mz];
+        const ex = Q[0] - P[0], ey = Q[1] - P[1], ez = Q[2] - P[2];
+        let px = ny * ez - nz * ey, py = nz * ex - nx * ez, pz = nx * ey - ny * ex; // in-plane ⟂ to the edge
+        const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
+        if (px * (Gx - mx) + py * (Gy - my) + pz * (Gz - mz) < 0) { px = -px; py = -py; pz = -pz; } // inward
+        return [mx + px * d, my + py * d, mz + pz * d];
       };
-      // inward-offset supporting line of an edge P0→P1 (offset only if it's a CUT edge)
-      const line = (P0: V, P1: V, recede: boolean): { pt: V; dir: V } => {
-        const dir = sub(P1, P0);
-        let m = cross(N, dir);
-        const ml = Math.hypot(m[0], m[1], m[2]) || 1; m = [m[0] / ml, m[1] / ml, m[2] / ml];
-        const mid: V = [(P0[0] + P1[0]) / 2, (P0[1] + P1[1]) / 2, (P0[2] + P1[2]) / 2];
-        if (dot(m, sub(G, mid)) < 0) m = [-m[0], -m[1], -m[2]]; // point inward (toward centroid)
-        const off = recede ? d : 0;
-        return { pt: [P0[0] + m[0] * off, P0[1] + m[1] * off, P0[2] + m[2] * off], dir };
-      };
-      const lAB = line(A, B, seam[0]), lBC = line(B, C, seam[1]), lCA = line(C, A, seam[2]);
-      const piv = pivots[fi]; // shared-pivot corners stay FULL → tiles join there with a ligament
-      const Ap = piv[0] ? A : clamp(meet(lCA.pt, lCA.dir, lAB.pt, lAB.dir, N) ?? A, A); // corner A: edges CA ∩ AB
-      const Bp = piv[1] ? B : clamp(meet(lAB.pt, lAB.dir, lBC.pt, lBC.dir, N) ?? B, B); // corner B: edges AB ∩ BC
-      const Cp = piv[2] ? C : clamp(meet(lBC.pt, lBC.dir, lCA.pt, lCA.dir, N) ?? C, C); // corner C: edges BC ∩ CA
-      const top = (v: V): V => [v[0] + N[0] * t, v[1] + N[1] * t, v[2] + N[2] * t];
-      const tops: V[] = [top(Ap), top(Bp), top(Cp)], bots: V[] = [Ap, Bp, Cp];
-      push(tops[0]); push(tops[1]); push(tops[2]); // top plate (open bottom — hidden by the cloth backing)
-      for (let e = 0; e < 3; e++) {
-        const j = (e + 1) % 3;
-        if (merge[e]) { push(bots[e]); push(bots[e]); push(bots[e]); push(bots[e]); push(bots[e]); push(bots[e]); continue; } // facet: same tile, no wall
-        push(bots[e]); push(bots[j]); push(tops[j]); // seam / boundary edge: this brick gets its own wall
-        push(bots[e]); push(tops[j]); push(tops[e]);
+      // CCW 6-gon ring: corner, edge-midpoint, corner, … — corners full (hinges), interior mids pinched.
+      const ring: V[] = [A, mid(A, B, pinch[0]), B, mid(B, C, pinch[1]), C, mid(C, A, pinch[2])];
+      const top = (v: V): V => [v[0] + nx * t, v[1] + ny * t, v[2] + nz * t];
+      const tops = ring.map(top);
+      const gT: V = [Gx + nx * t, Gy + ny * t, Gz + nz * t];
+      for (let e = 0; e < 6; e++) { const j = (e + 1) % 6; push(gT); push(tops[e]); push(tops[j]); } // top fan
+      for (let e = 0; e < 6; e++) { // side walls (open bottom — hidden by the cloth backing)
+        const j = (e + 1) % 6;
+        push(ring[e]); push(ring[j]); push(tops[j]);
+        push(ring[e]); push(tops[j]); push(tops[e]);
       }
     }
     this.thickAttr!.needsUpdate = true;
@@ -1155,9 +1108,7 @@ export class SimCanvas {
     this.thickAttr = null;
     this.thickMesh = null;
     this.tileFaces = null;
-    this.tileEdgeMerge = null;
-    this.tileEdgeSeam = null;
-    this.tilePivotCorner = null;
+    this.tileEdgePinch = null;
     this.circuitGroup.clear();
     this.routeGroup.clear();
     this.ghostGroup.clear();

@@ -1,11 +1,14 @@
 import type { SvgExportPayload } from "../model/fkld-svg-export.js";
-import type { StlExport } from "../model/stl-export.js";
+import { DEFAULT_PRINT_SIZE, type StlExport } from "../model/stl-export.js";
 import type { CircuitStl } from "../model/circuit-export.js";
 
 /** Returns the export payload for the current pattern when the modal opens, or null if none. */
 export type ExportProvider = () => SvgExportPayload | null;
-/** Builds the STL (3D-printed tiles) at the given tile height (model units) and adaptive-detail cap. */
-export type StlProvider = (heightUnits: number | null, maxSubdiv: number | null) => StlExport | null;
+/**
+ * Builds the STL (3D-printed tiles) at the given tile height (mm), adaptive-detail cap, and printable
+ * sheet size (mm, longest flat dimension — the flat pattern has no inherent scale). Nulls → defaults.
+ */
+export type StlProvider = (heightUnits: number | null, maxSubdiv: number | null, printSizeMm: number | null) => StlExport | null;
 /** Builds the separate circuit (traces + parts) STL from the sim's current placement, or null. */
 export type CircuitProvider = () => CircuitStl | null;
 
@@ -23,6 +26,7 @@ export class ExportModal {
   private readonly zipBtn: HTMLButtonElement;
   private readonly combinedBtn: HTMLButtonElement;
   private readonly stlBtn: HTMLButtonElement;
+  private readonly stlSizeInput: HTMLInputElement;
   private readonly stlHeightInput: HTMLInputElement;
   private readonly stlHeightUnit: HTMLElement;
   private readonly stlDetailInput: HTMLInputElement;
@@ -60,6 +64,10 @@ export class ExportModal {
           <span class="sim-status"></span>
           <button type="button" class="export-zip-btn">Cut + score (zip)</button>
           <button type="button" class="export-combined-btn">Single SVG</button>
+          <label class="export-stl-height-label" title="Printable sheet size — longest dimension of the flat pattern.">Size
+            <input type="number" class="export-stl-size" min="1" step="1" />
+            <span>mm</span>
+          </label>
           <label class="export-stl-height-label">Tile height
             <input type="number" class="export-stl-height" min="0" step="0.1" />
             <span class="export-stl-unit">units</span>
@@ -82,6 +90,7 @@ export class ExportModal {
     this.zipBtn = this.overlay.querySelector(".export-zip-btn")!;
     this.combinedBtn = this.overlay.querySelector(".export-combined-btn")!;
     this.stlBtn = this.overlay.querySelector(".export-stl-btn")!;
+    this.stlSizeInput = this.overlay.querySelector(".export-stl-size")!;
     this.stlHeightInput = this.overlay.querySelector(".export-stl-height")!;
     this.stlHeightUnit = this.overlay.querySelector(".export-stl-unit")!;
     this.stlDetailInput = this.overlay.querySelector(".export-stl-detail")!;
@@ -124,7 +133,9 @@ export class ExportModal {
   open(): void {
     this.payload = this.provider?.() ?? null;
     // Probe the STL at the model's defaults to prefill the menu inputs and enable the button.
-    const stlDefault = this.stlProvider?.(null, null) ?? null;
+    if (!this.stlSizeInput.value) this.stlSizeInput.value = String(DEFAULT_PRINT_SIZE);
+    const probeSize = parseFloat(this.stlSizeInput.value) || DEFAULT_PRINT_SIZE;
+    const stlDefault = this.stlProvider?.(null, null, probeSize) ?? null;
     this.stlBtn.disabled = !stlDefault; // the tiles export independently of the cut pattern
     if (stlDefault) {
       this.stlHeightInput.value = String(Math.round(stlDefault.height * 100) / 100);
@@ -168,7 +179,9 @@ export class ExportModal {
     const height = Number.isFinite(rawH) && rawH > 0 ? rawH : null; // null → builder's default
     const rawD = parseInt(this.stlDetailInput.value, 10);
     const detail = Number.isFinite(rawD) && rawD >= 0 ? rawD : null; // null → builder's default
-    const stl = this.stlProvider?.(height, detail) ?? null;
+    const rawS = parseFloat(this.stlSizeInput.value);
+    const size = Number.isFinite(rawS) && rawS > 0 ? rawS : null; // null → builder's print-size default
+    const stl = this.stlProvider?.(height, detail, size) ?? null;
     if (!stl) return;
     download(stl.filename, new Blob([stl.text], { type: "model/stl" }));
   }

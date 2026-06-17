@@ -1,16 +1,23 @@
 /**
- * STL export — the 3D-printed tiles, with **fold-adaptive triangulation**: faces that fold harder get
- * subdivided into more (smaller) tiles, flatter faces stay coarse. Per crease we read the fold angle
- * (`fkld:edges_dihedralTarget`, 0 = flat); a face's fold level is the sharpest crease it touches,
- * normalised against the model's sharpest fold, so resolution tracks "things folding on each other".
+ * STL export — the 3D-printed tiles in the **foldable printed-kirigami joinery** (the rotating-units
+ * structure you fold up from flat, like `kirigamish_parachuteish_180mm.stl`). Every triangular face is
+ * a rigid tile, inset so there is a gap around it; a thin living-hinge bridge spans every shared
+ * fold/facet edge so the tiles rotate about it, and "C" cuts stay open. The geometry is shared with
+ * the sim render and the house/door generator via `printed-joinery.ts`, so what you see is what you cut.
  *
- * Each resulting triangle is then inset toward its own centroid (separated, like the sim's printed
- * render) and extruded from z = 0 to a chosen height — a closed, watertight prism per tile.
- *
- * Coordinates are the flat pattern `vertices_coords` (z = 0 base); n-gon faces are fan-triangulated.
+ * Coordinates are the flat pattern `vertices_coords` (z = 0 base, extruded +height). The "Gap"
+ * (`inset`) is the tile inset / hinge-gap width, kept in lock-step with the sim's Gap slider.
  */
 import type { FoldFile } from "./fold-file.js";
-import { DEFAULT_MAX_SUBDIV, DETAIL_OFFSET, foldDepths, subdivBary, TILE_INSET_FRAC } from "./tile-subdiv.js";
+import { buildFoldableJoinery, edgeRole, type EdgeRole, type V3 } from "./printed-joinery.js";
+import { TILE_INSET_FRAC } from "./tile-subdiv.js";
+
+/** Hinge slab thickness as a fraction of the tile thickness (thin enough to bend). */
+const HINGE_THICK_FRAC = 0.35;
+/** Fraction of each shared edge the hinge bridge spans, centred. */
+const HINGE_SPAN = 0.6;
+/** How far the hinge pokes under each tile (fraction of inset-corner→incentre) so it welds in. */
+const HINGE_OVERLAP = 0.22;
 
 export interface StlExport {
   filename: string;
@@ -19,27 +26,40 @@ export interface StlExport {
   height: number;
   /** Model unit label for the menu (`frame_unit` when present, else "units"). */
   unit: string;
-  /** Max subdivision level applied to the most-folded faces — lets the menu prefill its input. */
+  /** Retained for the export menu's API; the connected joinery does not subdivide, so this is 0. */
   maxSubdiv: number;
 }
 
-type V3 = [number, number, number];
-
 /** Default tile height as a fraction of the flat bbox diagonal (≈ the sim's visual `TILE_THICK_FRAC`). */
 const DEFAULT_HEIGHT_FRAC = 0.02;
+/** Default printable sheet size (mm, longest flat-pattern dimension) — matches `gen-house-door.ts` FLAT_SIZE. */
+export const DEFAULT_PRINT_SIZE = 130;
+/** Default rigid tile thickness (mm) once scaled to a print size — matches `gen-house-door.ts` TILE_T. */
+const DEFAULT_PRINT_THICKNESS = 1.6;
+
+const edgeKey = (a: number, b: number): string => (a < b ? `${a},${b}` : `${b},${a}`);
 
 /**
- * Build the ASCII-STL export of the separated, extruded, fold-adaptive tiles. `heightUnits` is the
- * tile height in model units (null/≤0 → size-relative default); `maxSubdiv` caps adaptive splitting
- * (null → default); `inset` is the gap (tile shrink toward centroid; null → `TILE_INSET_FRAC`), kept
- * in lock-step with the sim's Gap slider. Returns null if there are no faces.
+ * Build the ASCII-STL export of the foldable printed-joinery (inset rigid tiles + thin hinge bridges).
+ * `heightUnits` is the tile height in model units (null/≤0 → size-relative default); `maxSubdiv` is
+ * accepted for API compatibility but unused; `inset` is the tile inset / hinge-gap width (null →
+ * `TILE_INSET_FRAC`), kept in lock-step with the sim's Gap slider.
+ *
+ * `printSize` (mm) is the **opt-in** key to a printable export: the flat pattern from `kirigamize` is
+ * at an arbitrary (often unit) scale and the viewer shows it fit-to-view, so the model carries no real
+ * size — baking those raw coords yields a sub-millimetre, degenerate sheet. When `printSize` is given,
+ * the pattern is scaled so its longest XY dimension is `printSize` and recentred (x/y centred, z based
+ * at 0), and the height defaults to an absolute `DEFAULT_PRINT_THICKNESS` — exactly like
+ * `scripts/gen-house-door.ts`, so "Tiles (STL)" reproduces the printable joinery sheet. Omitted (tests)
+ * → no scaling, model-unit output. Null if there are no faces.
  */
 export function buildStlExport(
   fold: FoldFile,
   baseName = "kirigami",
   heightUnits?: number | null,
-  maxSubdiv?: number | null,
+  _maxSubdiv?: number | null,
   inset?: number | null,
+  printSize?: number | null,
 ): StlExport | null {
   const faces = fold.faces_vertices;
   if (!Array.isArray(faces) || faces.length === 0) return null;
@@ -51,149 +71,49 @@ export function buildStlExport(
     return [Number(c[0]) || 0, Number(c[1]) || 0, Number(c[2]) || 0];
   };
 
-  const h = heightUnits != null && heightUnits > 0 ? heightUnits : DEFAULT_HEIGHT_FRAC * bboxDiagonal(coords);
-  const unit = typeof fold.frame_unit === "string" && fold.frame_unit ? fold.frame_unit : "units";
-  const cap = maxSubdiv != null && maxSubdiv >= 0 ? Math.floor(maxSubdiv) : DEFAULT_MAX_SUBDIV;
-  const ins = inset != null && inset > 0 ? inset : TILE_INSET_FRAC;
-  const depthOf = faceDepths(fold, faces, cap);
+  // flat-pattern coords; scale to the requested print size (mm) and recentre when asked (else raw units)
+  let coordsXYZ: V3[] = coords.map((_c, i) => vert(i));
+  const scaled = printSize != null && printSize > 0;
+  if (scaled) {
+    let xl = Infinity, xh = -Infinity, yl = Infinity, yh = -Infinity;
+    for (const c of coordsXYZ) { xl = Math.min(xl, c[0]); xh = Math.max(xh, c[0]); yl = Math.min(yl, c[1]); yh = Math.max(yh, c[1]); }
+    const span = Math.max(xh - xl, yh - yl) || 1;
+    const s = printSize / span, cx = (xl + xh) / 2, cy = (yl + yh) / 2;
+    coordsXYZ = coordsXYZ.map((c): V3 => [(c[0] - cx) * s, (c[1] - cy) * s, c[2] * s]);
+  }
 
-  const out: string[] = [`solid ${baseName}`];
-  faces.forEach((face, fi) => {
+  const h = heightUnits != null && heightUnits > 0
+    ? heightUnits
+    : scaled ? DEFAULT_PRINT_THICKNESS : DEFAULT_HEIGHT_FRAC * bboxDiagonal(coords);
+  const unit = scaled ? "mm" : typeof fold.frame_unit === "string" && fold.frame_unit ? fold.frame_unit : "units";
+  const gap = inset != null && inset > 0 ? inset : TILE_INSET_FRAC;
+
+  // edge → assignment + how many faces share it (→ role: cut / boundary / merge)
+  const assignOf = new Map<string, string>();
+  const ev = fold.edges_vertices, ea = fold.edges_assignment;
+  if (Array.isArray(ev) && Array.isArray(ea)) ev.forEach((e, i) => assignOf.set(edgeKey(e[0], e[1]), String(ea[i])));
+  const faceCount = new Map<string, number>();
+  for (const face of faces) {
+    if (!Array.isArray(face) || face.length < 3) continue;
+    for (let k = 0; k < face.length; k++) faceCount.set(edgeKey(face[k], face[(k + 1) % face.length]), (faceCount.get(edgeKey(face[k], face[(k + 1) % face.length])) ?? 0) + 1);
+  }
+  const roleOf = (a: number, b: number): EdgeRole => edgeRole(assignOf.get(edgeKey(a, b)), faceCount.get(edgeKey(a, b)) ?? 1);
+
+  // fan n-gons to triangles (inner fan edges are interior → never a real cut/boundary)
+  const tris: number[][] = [];
+  faces.forEach((face) => {
     if (!Array.isArray(face) || face.length < 3) return;
-    const corners = face.map(vert);
-    const subTris = subdivBary(depthOf[fi]);
-    // Fan to base triangles, subdivide each by this face's fold level, then inset + extrude each tri.
-    for (let k = 1; k + 1 < corners.length; k++) {
-      const base: [V3, V3, V3] = [corners[0], corners[k], corners[k + 1]];
-      for (const bt of subTris) {
-        writePrism(out, insetToCentroid([evalBary(bt[0], base), evalBary(bt[1], base), evalBary(bt[2], base)], ins), h);
-      }
-    }
+    for (let k = 1; k + 1 < face.length; k++) tris.push([face[0], face[k], face[k + 1]]);
   });
+
+  const vs = buildFoldableJoinery(tris, coordsXYZ, roleOf, {
+    thickness: h, gap, hingeThickness: h * HINGE_THICK_FRAC, hingeSpan: HINGE_SPAN, hingeOverlap: HINGE_OVERLAP, layout: "flat",
+    assignmentOf: (a, b) => assignOf.get(edgeKey(a, b)),
+  });
+  const out: string[] = [`solid ${baseName}`];
+  for (let i = 0; i + 2 < vs.length; i += 3) writeFacet(out, vs[i], vs[i + 1], vs[i + 2]);
   out.push(`endsolid ${baseName}`);
-  return { filename: `${baseName}.stl`, text: out.join("\n") + "\n", height: h, unit, maxSubdiv: cap };
-}
-
-/** Evaluate a barycentric weight against a triangle's three corners. */
-function evalBary(w: [number, number, number], t: [V3, V3, V3]): V3 {
-  return [
-    w[0] * t[0][0] + w[1] * t[1][0] + w[2] * t[2][0],
-    w[0] * t[0][1] + w[1] * t[1][1] + w[2] * t[2][1],
-    w[0] * t[0][2] + w[1] * t[1][2] + w[2] * t[2][2],
-  ];
-}
-
-/** Per-face subdivision depth: more for harder-folding faces, normalised to the model's sharpest fold. */
-function faceDepths(fold: FoldFile, faces: number[][], level: number): number[] {
-  const foldMag = edgeFoldMagnitudes(fold, faces);
-  const score = faces.map((f) => {
-    let s = 0;
-    for (let k = 0; k < f.length; k++) s = Math.max(s, foldMag.get(edgeKey(f[k], f[(k + 1) % f.length])) ?? 0);
-    return s;
-  });
-  return foldDepths(score, level + DETAIL_OFFSET); // level 0 → 1 subdivision (slider shift)
-}
-
-function centroid(face: number[], vert: (i: number) => V3): [number, number] {
-  let x = 0, y = 0;
-  for (const i of face) { const v = vert(i); x += v[0]; y += v[1]; }
-  return [x / face.length, y / face.length];
-}
-
-/** Map each undirected edge → fold magnitude (rad): crease targets when present, else folded dihedral. */
-function edgeFoldMagnitudes(fold: FoldFile, faces: number[][]): Map<string, number> {
-  const ev = fold.edges_vertices;
-  const dt = (fold as { "fkld:edges_dihedralTarget"?: unknown[] })["fkld:edges_dihedralTarget"];
-  if (Array.isArray(ev) && Array.isArray(dt)) {
-    const map = new Map<string, number>();
-    let any = false;
-    for (let i = 0; i < ev.length; i++) {
-      const m = Math.abs(Number(dt[i]) || 0);
-      if (m > 1e-6) any = true;
-      map.set(edgeKey(ev[i][0], ev[i][1]), m);
-    }
-    if (any) return map;
-  }
-  // Fallback: actual dihedral between adjacent faces in the declared folded form.
-  const folded = foldedFrameCoords(fold);
-  return folded ? dihedralsFromFolded(faces, folded) : new Map();
-}
-
-/** Dihedral fold angle (0 = coplanar) across every interior edge of the folded mesh. */
-function dihedralsFromFolded(faces: number[][], coords: number[][]): Map<string, number> {
-  const edgeFaces = new Map<string, number[]>();
-  faces.forEach((f, fi) => {
-    for (let k = 0; k < f.length; k++) {
-      const key = edgeKey(f[k], f[(k + 1) % f.length]);
-      (edgeFaces.get(key) ?? edgeFaces.set(key, []).get(key)!).push(fi);
-    }
-  });
-  const normals = faces.map((f) => faceNormal(f, coords));
-  const map = new Map<string, number>();
-  for (const [key, fs] of edgeFaces) {
-    if (fs.length === 2) {
-      const dot = normals[fs[0]][0] * normals[fs[1]][0] + normals[fs[0]][1] * normals[fs[1]][1] + normals[fs[0]][2] * normals[fs[1]][2];
-      map.set(key, Math.acos(Math.min(1, Math.max(-1, dot)))); // 0 = flat … π = folded back
-    } else map.set(key, 0);
-  }
-  return map;
-}
-
-function foldedFrameCoords(fold: FoldFile): number[][] | null {
-  const flat = fold.vertices_coords;
-  if (!Array.isArray(flat)) return null;
-  const frames = (fold as { file_frames?: Array<{ frame_classes?: string[]; vertices_coords?: number[][] }> }).file_frames;
-  const f = frames?.find(
-    (fr) => Array.isArray(fr.vertices_coords) && fr.vertices_coords.length === flat.length && (fr.frame_classes ?? []).includes("foldedForm"),
-  );
-  return f?.vertices_coords ?? null;
-}
-
-/** Newell's method — robust polygon normal (works for triangles and n-gons). */
-function faceNormal(face: number[], coords: number[][]): V3 {
-  let nx = 0, ny = 0, nz = 0;
-  for (let i = 0; i < face.length; i++) {
-    const a = coords[face[i]] ?? [], b = coords[face[(i + 1) % face.length]] ?? [];
-    const ax = Number(a[0]) || 0, ay = Number(a[1]) || 0, az = Number(a[2]) || 0;
-    const bx = Number(b[0]) || 0, by = Number(b[1]) || 0, bz = Number(b[2]) || 0;
-    nx += (ay - by) * (az + bz);
-    ny += (az - bz) * (ax + bx);
-    nz += (ax - bx) * (ay + by);
-  }
-  const l = Math.hypot(nx, ny, nz) || 1;
-  return [nx / l, ny / l, nz / l];
-}
-
-const edgeKey = (a: number, b: number): string => (a < b ? `${a},${b}` : `${b},${a}`);
-
-/** Shrink each corner toward the triangle centroid so the tile separates from its neighbours. */
-function insetToCentroid(tri: [V3, V3, V3], inset: number): [V3, V3, V3] {
-  const gx = (tri[0][0] + tri[1][0] + tri[2][0]) / 3;
-  const gy = (tri[0][1] + tri[1][1] + tri[2][1]) / 3;
-  const gz = (tri[0][2] + tri[1][2] + tri[2][2]) / 3;
-  return tri.map(([x, y, z]): V3 => [
-    x + (gx - x) * inset,
-    y + (gy - y) * inset,
-    z + (gz - z) * inset,
-  ]) as [V3, V3, V3];
-}
-
-/** Write a closed, watertight triangular prism: flat triangle (a,b,c) at its z, extruded +h in z. */
-function writePrism(out: string[], [a, b, c]: [V3, V3, V3], h: number): void {
-  // Canonicalize to CCW (in xy) so top normals point +z and side walls face outward.
-  const ccw = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) >= 0;
-  const p0 = a, p1 = ccw ? b : c, p2 = ccw ? c : b;
-  const top = (p: V3): V3 => [p[0], p[1], p[2] + h];
-  const t0 = top(p0), t1 = top(p1), t2 = top(p2);
-
-  writeFacet(out, p0, p2, p1); // bottom → normal −z
-  writeFacet(out, t0, t1, t2); // top → normal +z
-  const base = [p0, p1, p2], tops = [t0, t1, t2];
-  for (let e = 0; e < 3; e++) {
-    const j = (e + 1) % 3;
-    writeFacet(out, base[e], base[j], tops[j]); // side wall, outward
-    writeFacet(out, base[e], tops[j], tops[e]);
-  }
+  return { filename: `${baseName}.stl`, text: out.join("\n") + "\n", height: h, unit, maxSubdiv: 0 };
 }
 
 function bboxDiagonal(coords: number[][]): number {
@@ -224,8 +144,8 @@ function normal(a: V3, b: V3, c: V3): V3 {
   const nx = uy * vz - uz * vy;
   const ny = uz * vx - ux * vz;
   const nz = ux * vy - uy * vx;
-  const len = Math.hypot(nx, ny, nz) || 1;
-  return [nx / len, ny / len, nz / len];
+  const l = Math.hypot(nx, ny, nz) || 1;
+  return [nx / l, ny / l, nz / l];
 }
 
 const fmt = (n: number): string => (Number.isFinite(n) ? String(Math.round(n * 1e6) / 1e6) : "0");

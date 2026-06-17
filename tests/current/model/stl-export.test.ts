@@ -1,99 +1,92 @@
 /**
- * FKLD → STL export: the 3D-printed tiles. Each flat face is inset toward its centroid (separated
- * from neighbours) and extruded to a chosen height, producing one closed triangular prism per tile.
+ * FKLD → STL export: the 3D-printed tiles in the **foldable joinery** (`printed-joinery.ts`). Every
+ * face is a rigid tile inset so there is a gap around it; a thin living-hinge bridge spans every shared
+ * fold/facet edge (so the tiles fold about it) and "C" cuts stay open. Print flat, fold up.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { buildStlExport } from "../../../src/model/stl-export.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
 
-const load = (n: string): FoldFile =>
-  JSON.parse(readFileSync(fileURLToPath(new URL(`../../../public/examples/${n}`, import.meta.url)), "utf8")) as FoldFile;
-
+type V3 = [number, number, number];
 const countFacets = (stl: string): number => (stl.match(/facet normal/g) ?? []).length;
 const verts = (stl: string): V3[] =>
   [...stl.matchAll(/vertex (\S+) (\S+) (\S+)/g)].map((m) => [Number(m[1]), Number(m[2]), Number(m[3])]);
-type V3 = [number, number, number];
+const zSet = (vs: V3[]): number[] => [...new Set(vs.map((v) => Math.round(v[2] * 1e4) / 1e4))].sort((a, b) => a - b);
 
-/** A single tile (triangular prism) is 8 facets: top + bottom + 3 side walls × 2. */
-const FACETS_PER_TILE = 8;
-
-/** True when the listed facets form a closed surface: every undirected edge used once each way. */
-function isClosed(vs: V3[]): boolean {
+/** Every closed solid uses each directed edge once and its reverse once (tiles + hinges are each closed). */
+function allClosed(vs: V3[]): boolean {
   const dir = new Map<string, number>();
-  const key = (p: V3): string => p.join(",");
-  for (let i = 0; i < vs.length; i += 3) {
-    const tri = [vs[i], vs[i + 1], vs[i + 2]];
-    for (let e = 0; e < 3; e++) {
-      const a = key(tri[e]), b = key(tri[(e + 1) % 3]);
-      dir.set(`${a}|${b}`, (dir.get(`${a}|${b}`) ?? 0) + 1);
-    }
-  }
+  const key = (p: V3): string => p.map((n) => Math.round(n * 1e3)).join(",");
+  for (let i = 0; i < vs.length; i += 3)
+    for (let e = 0; e < 3; e++) dir.set(`${key(vs[i + e])}|${key(vs[i + (e + 1) % 3])}`, (dir.get(`${key(vs[i + e])}|${key(vs[i + (e + 1) % 3])}`) ?? 0) + 1);
   for (const [e, n] of dir) {
     const [a, b] = e.split("|");
-    if (n !== 1 || (dir.get(`${b}|${a}`) ?? 0) !== 1) return false; // each half-edge exactly once
+    if (n !== 1 || (dir.get(`${b}|${a}`) ?? 0) !== 1) return false;
   }
   return true;
 }
 
-describe("buildStlExport — extruded 3D-printed tiles (synthetic)", () => {
-  it("emits one closed prism per face (8 facets), wrapped in solid/endsolid", () => {
-    const fold: FoldFile = {
-      vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
-      faces_vertices: [[0, 1, 2], [0, 2, 3]],
-    };
+describe("buildStlExport — foldable printed joinery", () => {
+  it("wraps the tiles in solid/endsolid and names the file", () => {
+    const fold: FoldFile = { vertices_coords: [[0, 0], [10, 0], [5, 8]], faces_vertices: [[0, 1, 2]] };
     const out = buildStlExport(fold, "sq", 3)!;
     expect(out.filename).toBe("sq.stl");
     expect(out.text.startsWith("solid sq")).toBe(true);
     expect(out.text.trimEnd().endsWith("endsolid sq")).toBe(true);
-    expect(countFacets(out.text)).toBe(2 * FACETS_PER_TILE);
+    expect(out.maxSubdiv).toBe(0);
   });
 
-  it("each tile is a watertight prism: base at z=0, top at the chosen height", () => {
-    const fold: FoldFile = {
-      vertices_coords: [[0, 0], [10, 0], [5, 8]],
-      faces_vertices: [[0, 1, 2]],
-    };
-    const out = buildStlExport(fold, "t", 4)!;
-    const vs = verts(out.text);
-    expect(isClosed(vs)).toBe(true);
-    const zs = new Set(vs.map((v) => v[2]));
-    expect([...zs].sort((a, b) => a - b)).toEqual([0, 4]); // exactly the base and the top plane
-    expect(out.height).toBe(4);
+  it("a lone triangle is one closed inset prism: base at z=0, top at the height, strictly inside the face", () => {
+    const fold: FoldFile = { vertices_coords: [[0, 0], [10, 0], [5, 8]], faces_vertices: [[0, 1, 2]] };
+    const vs = verts(buildStlExport(fold, "t", 4)!.text);
+    expect(allClosed(vs)).toBe(true);
+    expect(zSet(vs)).toEqual([0, 4]); // a lone tile has no hinge → only base + top
+    expect(countFacets(buildStlExport(fold, "t", 4)!.text)).toBe(8); // triangular prism
+    for (const [x, y] of vs) { expect(x).toBeGreaterThan(0); expect(x).toBeLessThan(10); expect(y).toBeGreaterThan(0); expect(y).toBeLessThan(8); }
   });
 
-  it("insets each tile toward its centroid (separated, strictly inside the source face)", () => {
-    const fold: FoldFile = {
-      vertices_coords: [[0, 0], [10, 0], [10, 10]],
-      faces_vertices: [[0, 1, 2]],
-    };
-    const vs = verts(buildStlExport(fold, "t", 2)!.text);
-    for (const [x, y] of vs) {
-      expect(x).toBeGreaterThan(0);
-      expect(x).toBeLessThan(10);
-      expect(y).toBeGreaterThan(0);
-      expect(y).toBeLessThan(10);
-    }
-  });
-
-  it("separates tiles that shared an edge — the shared edge opens into a gap", () => {
-    const fold: FoldFile = {
+  it("HINGES a shared fold edge with a thin bridge, seated on the inside of the fold per M/V/F", () => {
+    const make = (assign: string): string => buildStlExport({
       vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
       faces_vertices: [[0, 1, 2], [0, 2, 3]], // share edge 0–2
+      edges_vertices: [[0, 1], [1, 2], [0, 2], [2, 3], [0, 3]],
+      edges_assignment: ["B", "B", assign, "B", "B"],
+    } as FoldFile, "t", 2)!.text;
+    // height 2 → hinge slab thickness 0.35·2 = 0.7. Mountain seats at the bottom, valley at the top,
+    // flat at mid — so the rigid tiles pivot about the hinge on the inside of the fold.
+    expect(allClosed(verts(make("M")))).toBe(true);
+    expect(countFacets(make("M"))).toBe(2 * 8 + 12); // 2 inset prisms + 1 hinge box
+    expect(zSet(verts(make("M")))).toEqual([0, 0.7, 2]); // mountain → bottom band [0, 0.7]
+    expect(zSet(verts(make("V")))).toEqual([0, 1.3, 2]); // valley → top band [1.3, 2]
+    expect(zSet(verts(make("F")))).toEqual([0, 0.65, 1.35, 2]); // flat → mid band [0.65, 1.35]
+  });
+
+  it("does NOT hinge a cut edge: the gap stays open (no bridge, no mid-height layer)", () => {
+    const fold: FoldFile = {
+      vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      faces_vertices: [[0, 1, 2], [0, 2, 3]],
+      edges_vertices: [[0, 1], [1, 2], [0, 2], [2, 3], [0, 3]],
+      edges_assignment: ["B", "B", "C", "B", "B"], // 0–2 is a cut → stays open
     };
-    const xy = new Set(verts(buildStlExport(fold, "t", 1)!.text).map(([x, y]) => `${x},${y}`));
-    expect(xy.size).toBe(6); // 3 inset corners per tile, none coincident across the two tiles
+    const out = buildStlExport(fold, "t", 2)!;
+    expect(countFacets(out.text)).toBe(2 * 8); // two inset tiles only, no hinge
+    expect(zSet(verts(out.text))).toEqual([0, 2]); // no hinge layer
+  });
+
+  it("a wider Gap shrinks each tile (corners pull further toward the centroid)", () => {
+    const fold: FoldFile = { vertices_coords: [[0, 0], [10, 0], [5, 8]], faces_vertices: [[0, 1, 2]] };
+    const minCornerDistToCentroid = (gap: number): number => {
+      const c: V3 = [5, 8 / 3, 0];
+      return Math.min(...verts(buildStlExport(fold, "t", 1, null, gap)!.text).filter((v) => v[2] === 0).map((v) => Math.hypot(v[0] - c[0], v[1] - c[1])));
+    };
+    expect(minCornerDistToCentroid(0.4)).toBeLessThan(minCornerDistToCentroid(0.05)); // bigger gap → smaller tile
   });
 
   it("uses a size-relative default height when none is given (≈ 2% of the bbox diagonal)", () => {
-    const fold: FoldFile = {
-      vertices_coords: [[0, 0], [100, 0], [100, 100], [0, 100]],
-      faces_vertices: [[0, 1, 2]],
-    };
-    const out = buildStlExport(fold)!; // diagonal ≈ 141.4 → default ≈ 2.83
+    const fold: FoldFile = { vertices_coords: [[0, 0], [100, 0], [0, 100]], faces_vertices: [[0, 1, 2]] };
+    const out = buildStlExport(fold)!;
     expect(out.height).toBeCloseTo(0.02 * Math.hypot(100, 100), 4);
-    expect(new Set(verts(out.text).map((v) => v[2]))).toContain(0);
+    expect(zSet(verts(out.text))).toContain(0);
   });
 
   it("reports the unit label from frame_unit, defaulting to \"units\"", () => {
@@ -108,81 +101,11 @@ describe("buildStlExport — extruded 3D-printed tiles (synthetic)", () => {
       faces_vertices: [[0, 1, 2]],
       file_frames: [{ frame_classes: ["foldedForm"], vertices_coords: [[0, 0, 0], [10, 0, 0], [5, 4, 7]] }],
     } as unknown as FoldFile;
-    const out = buildStlExport(fold, "t", 2)!;
-    const zs = new Set(verts(out.text).map((v) => v[2]));
-    expect([...zs].sort((a, b) => a - b)).toEqual([0, 2]); // flat base + height, never the folded z=4/7
+    expect(zSet(verts(buildStlExport(fold, "t", 2)!.text))).toEqual([0, 2]); // never the folded z=4/7
   });
 
   it("returns null when there are no faces", () => {
     expect(buildStlExport({ vertices_coords: [[0, 0]] })).toBeNull();
     expect(buildStlExport({ faces_vertices: [], vertices_coords: [[0, 0]] })).toBeNull();
-  });
-});
-
-describe("buildStlExport — fold-adaptive triangulation", () => {
-  // face 0 touches a hard-folding crease (edge 0–1); face 1 is all-flat → only face 0 subdivides.
-  const fold = {
-    vertices_coords: [[0, 0], [10, 0], [0, 10], [20, 0], [30, 0], [20, 10]],
-    faces_vertices: [[0, 1, 2], [3, 4, 5]],
-    edges_vertices: [[0, 1], [1, 2], [2, 0], [3, 4], [4, 5], [5, 3]],
-    "fkld:edges_dihedralTarget": [2.0, 0, 0, 0, 0, 0],
-  } as unknown as FoldFile;
-
-  it("subdivides the folded face but not the flat one (more folding → more tiles)", () => {
-    const tiles = (stl: string): number => countFacets(stl) / FACETS_PER_TILE;
-    // level 0 → cap 1 (the +1 offset): folded face splits to 4^1 = 4 tiles, flat face stays 1 → 5
-    expect(tiles(buildStlExport(fold, "f", 1, 0)!.text)).toBe(4 + 1);
-    // level 2 → cap 3: folded face 4^3 = 64, flat face 1 → 65
-    expect(tiles(buildStlExport(fold, "f", 1, 2)!.text)).toBe(64 + 1);
-    expect(buildStlExport(fold, "f", 1, 2)!.maxSubdiv).toBe(2); // reported value is the LEVEL
-  });
-
-  it("scales with the detail level (deeper level → more tiles on the folded face)", () => {
-    const tiles = (d: number): number => countFacets(buildStlExport(fold, "f", 1, d)!.text) / FACETS_PER_TILE;
-    expect(tiles(1)).toBe(4 ** 2 + 1); // level 1 → cap 2
-    expect(tiles(3)).toBe(4 ** 4 + 1); // level 3 → cap 4
-  });
-
-  it("does not subdivide a flat model regardless of detail", () => {
-    const flat = {
-      vertices_coords: [[0, 0], [10, 0], [0, 10]],
-      faces_vertices: [[0, 1, 2]],
-      edges_vertices: [[0, 1], [1, 2], [2, 0]],
-      "fkld:edges_dihedralTarget": [0, 0, 0],
-    } as unknown as FoldFile;
-    expect(countFacets(buildStlExport(flat, "z", 1, 4)!.text)).toBe(FACETS_PER_TILE); // 1 tile
-  });
-
-  it("falls back to the folded-form dihedral when no crease targets are present", () => {
-    // a ridge tent: two coplanar flat triangles, folded form lifts the shared edge → real dihedral
-    const tent = {
-      vertices_coords: [[0, 0], [10, 0], [5, -5], [5, 5]],
-      faces_vertices: [[0, 1, 3], [0, 3, 2]], // share edge 0–3
-      file_frames: [
-        { frame_classes: ["foldedForm"], vertices_coords: [[0, 0, 0], [10, 0, 0], [5, -5, 6], [5, 5, 6]] },
-      ],
-    } as unknown as FoldFile;
-    expect(countFacets(buildStlExport(tent, "t", 1, 2)!.text)).toBeGreaterThan(2 * FACETS_PER_TILE);
-  });
-});
-
-describe("buildStlExport — real AKDE example", () => {
-  it("exports finite separated tiles, flat-based, spanning z 0..h", () => {
-    const fold = load("akde-hex.fkld");
-    const out = buildStlExport(fold, "akde-hex", 5, 0)!;
-    // separated tiles only — fold-adaptive subdivision means at least one tile per face
-    expect(countFacets(out.text)).toBeGreaterThanOrEqual(fold.faces_vertices!.length * FACETS_PER_TILE);
-    const vs = verts(out.text);
-    for (const v of vs) for (const k of v) expect(Number.isFinite(k)).toBe(true);
-    const zs = vs.map((v) => v[2]);
-    expect(Math.min(...zs)).toBe(0); // based at 0
-    expect(Math.max(...zs)).toBe(5); // up to the chosen height
-  });
-
-  it("a higher detail level adds more tiles around the mountain folds", () => {
-    const fold = load("akde-hex.fkld");
-    const low = countFacets(buildStlExport(fold, "akde-hex", 5, 0)!.text); // level 0 → cap 2
-    const high = countFacets(buildStlExport(fold, "akde-hex", 5, 2)!.text); // level 2 → cap 4
-    expect(high).toBeGreaterThan(low); // mountain-fold faces subdivide further
   });
 });

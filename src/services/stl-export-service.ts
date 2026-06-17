@@ -13,10 +13,11 @@ export function resolveStlExport(
   heightUnits?: number | null,
   maxSubdiv?: number | null,
   inset?: number | null,
+  printSize?: number | null,
 ): StlExport | null {
   const src = shown ?? (model?.kind === "fold" ? { object: model.object, name: model.name } : null);
   if (!src) return null;
-  return buildStlExport(src.object, baseName(src.name), heightUnits, maxSubdiv, inset);
+  return buildStlExport(src.object, baseName(src.name), heightUnits, maxSubdiv, inset, printSize);
 }
 
 function baseName(name: string): string {
