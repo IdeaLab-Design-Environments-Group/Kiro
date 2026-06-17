@@ -1,8 +1,6 @@
 import type { FoldScene, SimMaterial } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
-import { type Circuit, COMPONENT_KINDS, COMPONENT_SPECS, EMPTY_CIRCUIT } from "../model/circuit.js";
-import { buildCircuitStl, type CircuitStl } from "../model/circuit-export.js";
-import type { CircuitTool, SimCanvas } from "./sim-canvas.js";
+import type { SimCanvas } from "./sim-canvas.js";
 
 /** Returns a ready fold scene when the sim opens, or null when no model is loaded. */
 export type SimSceneProvider = () => { scene: FoldScene; title: string } | null;
@@ -27,20 +25,14 @@ export class SimModal {
   private readonly gapSlider: HTMLInputElement;
   private readonly gapValue: HTMLElement;
   private readonly tabs: HTMLButtonElement[];
-  private readonly circuitTab: HTMLButtonElement;
-  private readonly palette: HTMLElement;
-  private readonly partButtons: HTMLButtonElement[];
   private provider: SimSceneProvider | null = null;
   private canvas: SimCanvas | null = null;
   private material: SimMaterial = "vinyl";
   private detail = DEFAULT_MAX_SUBDIV;
   private gap = TILE_INSET_FRAC;
-  private circuitOn = false;
-  private tool: CircuitTool = "select";
   private materialListener: ((m: SimMaterial) => void) | null = null;
   private detailListener: ((d: number) => void) | null = null;
   private gapListener: ((g: number) => void) | null = null;
-  private saveCircuitListener: (() => void) | null = null;
 
   constructor() {
     this.trigger = document.createElement("button");
@@ -68,18 +60,6 @@ export class SimModal {
           <div class="sim-tabs" role="tablist">
             <button type="button" class="sim-tab is-active" data-material="vinyl" role="tab" aria-selected="true">Vinyl / paper</button>
             <button type="button" class="sim-tab" data-material="printed" role="tab" aria-selected="false">3D-printed</button>
-            <button type="button" class="sim-tab sim-circuit-tab" role="tab" aria-selected="false">Circuit</button>
-          </div>
-          <div class="sim-palette" hidden>
-            <span class="sim-palette-label">Tool</span>
-            <button type="button" class="sim-part" data-tool="select">Select</button>
-            <button type="button" class="sim-part" data-tool="route">Route</button>
-            <span class="sim-palette-label">Place</span>
-            ${COMPONENT_KINDS.map(
-              (k) => `<button type="button" class="sim-part" data-tool="${k}">${COMPONENT_SPECS[k].label}</button>`,
-            ).join("")}
-            <button type="button" class="sim-part-clear">Clear</button>
-            <span class="sim-palette-hint">Place: pick a part — it rides the cursor, click to drop (R rotates, Esc stops). Select then M moves, R rotates, Del deletes. Route: click pad → pad. Wheel zooms to cursor; snaps to grid.</span>
           </div>
           <div class="sim-canvas-mount"></div>
         </div>
@@ -113,17 +93,9 @@ export class SimModal {
     this.gapSlider = this.overlay.querySelector(".sim-gap-slider")!;
     this.gapValue = this.overlay.querySelector(".sim-gap-value")!;
     this.tabs = Array.from(this.overlay.querySelectorAll<HTMLButtonElement>(".sim-tab[data-material]"));
-    this.circuitTab = this.overlay.querySelector(".sim-circuit-tab")!;
-    this.palette = this.overlay.querySelector(".sim-palette")!;
-    this.partButtons = Array.from(this.overlay.querySelectorAll<HTMLButtonElement>(".sim-part"));
     for (const tab of this.tabs) {
       tab.addEventListener("click", () => this.selectMaterial(tab.dataset.material as SimMaterial));
     }
-    this.circuitTab.addEventListener("click", () => this.enterCircuit());
-    for (const btn of this.partButtons) {
-      btn.addEventListener("click", () => this.selectTool(btn.dataset.tool as CircuitTool));
-    }
-    this.overlay.querySelector(".sim-part-clear")!.addEventListener("click", () => this.canvas?.clearCircuit());
 
     this.foldSlider.addEventListener("input", () => this.applyFold());
     this.detailSlider.addEventListener("input", () => this.applyDetail());
@@ -136,28 +108,8 @@ export class SimModal {
     });
     document.addEventListener("keydown", (e) => {
       if (this.overlay.hidden) return;
-      if ((e.metaKey || e.ctrlKey) && (e.key === "t" || e.key === "T")) {
-        e.preventDefault(); // save the routed circuit onto the design (overrides the browser new-tab)
-        this.saveCircuitListener?.();
-        return;
-      }
-      if (this.circuitOn && this.handleCircuitKey(e)) return; // KiCad-style hotkeys inside the editor
       if (e.key === "Escape") this.close();
     });
-  }
-
-  /** KiCad-style editor hotkeys; returns true when the key was consumed. */
-  private handleCircuitKey(e: KeyboardEvent): boolean {
-    if (e.metaKey || e.ctrlKey || e.altKey) return false;
-    switch (e.key) {
-      case "Escape": this.canvas?.escapeTool(); return true; // cancel place/move/route, deselect (don't close)
-      case "Delete": case "Backspace": this.canvas?.deleteSelected(); return true;
-      case "m": case "M": this.canvas?.moveSelected(); return true; // pick the selected part up onto the cursor
-      case "r": case "R": this.canvas?.rotateSelected(); return true;
-      case "x": case "X": this.selectTool("route"); return true;
-      case "s": case "S": this.selectTool("select"); return true;
-      default: return false;
-    }
   }
 
   mountTrigger(container: HTMLElement): void {
@@ -183,9 +135,8 @@ export class SimModal {
     this.gapListener = cb;
   }
 
-  /** Switch the sim material tab: leave circuit mode, update state, then rebuild (fold % preserved). */
+  /** Switch the sim material tab: update state, then rebuild (fold % preserved). */
   private selectMaterial(m: SimMaterial): void {
-    if (this.circuitOn) this.exitCircuit();
     this.setMaterialTabsActive(m);
     if (m === this.material) return;
     this.material = m;
@@ -194,64 +145,12 @@ export class SimModal {
     if (this.canvas) this.loadWorld();
   }
 
-  private setMaterialTabsActive(m: SimMaterial | null): void {
+  private setMaterialTabsActive(m: SimMaterial): void {
     for (const tab of this.tabs) {
       const on = tab.dataset.material === m;
       tab.classList.toggle("is-active", on);
       tab.setAttribute("aria-selected", String(on));
     }
-  }
-
-  /** Enter circuit mode: force 3D-printed tiles (the circuit rides them), show the parts palette. */
-  private enterCircuit(): void {
-    if (this.material !== "printed") {
-      this.material = "printed";
-      this.syncDetailVisibility();
-      this.materialListener?.("printed");
-      if (this.canvas) this.loadWorld();
-    }
-    this.circuitOn = true;
-    this.setMaterialTabsActive(null);
-    this.circuitTab.classList.add("is-active");
-    this.circuitTab.setAttribute("aria-selected", "true");
-    this.palette.hidden = false;
-    this.canvas?.setCircuitMode(true);
-    this.selectTool("select"); // KiCad default: the selection/move cursor
-  }
-
-  private exitCircuit(): void {
-    this.circuitOn = false;
-    this.tool = "select";
-    this.circuitTab.classList.remove("is-active");
-    this.circuitTab.setAttribute("aria-selected", "false");
-    this.palette.hidden = true;
-    for (const b of this.partButtons) b.classList.remove("is-active");
-    this.canvas?.setCircuitMode(false);
-  }
-
-  /** Pick the active editor tool (select / route / a part) and reflect it in the palette. */
-  private selectTool(tool: CircuitTool): void {
-    this.tool = tool;
-    for (const b of this.partButtons) b.classList.toggle("is-active", b.dataset.tool === tool);
-    this.canvas?.setCircuitTool(tool);
-  }
-
-  /** Notified on ⌘/Ctrl+T — the controller saves the current circuit onto the design. */
-  onSaveCircuit(cb: () => void): void {
-    this.saveCircuitListener = cb;
-  }
-
-  /** The circuit currently authored on the tiles (empty when no scene). */
-  getCircuit(): Circuit {
-    return this.canvas?.getCircuit() ?? EMPTY_CIRCUIT;
-  }
-
-  /** Build the separate circuit STL from the current placement (or null if empty / no scene). */
-  getCircuitStl(baseName: string): CircuitStl | null {
-    const c = this.canvas?.getCircuit();
-    const net = this.canvas?.getNet();
-    if (!c || !net) return null;
-    return buildCircuitStl(c, net, baseName);
   }
 
   /** Detail and gap only matter for 3D-printed tiles — hide both in vinyl/paper mode. */

@@ -1,4 +1,4 @@
-/** Minimal ASCII-STL writers shared by the tile and circuit exports. Normals come from winding. */
+/** Minimal ASCII-STL writers for the tile export. Normals come from winding. */
 export type V3 = [number, number, number];
 
 export function facet(out: string[], a: V3, b: V3, c: V3): void {

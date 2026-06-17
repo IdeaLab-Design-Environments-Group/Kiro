@@ -57,6 +57,14 @@ export interface SolverParams {
    * in vinyl mode.
    */
   kBarrier?: number;
+  /**
+   * 3D-PRINTED mode only. Rigid polygon panels: add an axial cross-brace across every facet ("F")
+   * triangulation diagonal, so coplanar triangles fold as ONE rigid panel and the model only
+   * articulates at the real mountain/valley hinges between panels — not at the FKLD facet lines the
+   * vinyl sim bends along. Axial braces are tracked by `computeDt`, so this stays stable (unlike just
+   * raising `kFacet`). Unused in vinyl mode.
+   */
+  rigidFacets?: boolean;
 }
 
 export const DEFAULT_PARAMS: SolverParams = {

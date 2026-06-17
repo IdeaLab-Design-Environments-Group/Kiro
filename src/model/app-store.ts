@@ -8,7 +8,6 @@
  * app/UI state that the three panels and the action buttons read.
  */
 import type { FoldFile, LoadedModel } from "./fold-file.js";
-import { type Circuit, EMPTY_CIRCUIT } from "./circuit.js";
 import { DEFAULT_MAX_SUBDIV, TILE_INSET_FRAC } from "./tile-subdiv.js";
 
 /**
@@ -41,8 +40,6 @@ export interface AppState {
   simDetail: number;
   /** Inter-tile gap (shrink-toward-centroid fraction), shared by the 3D-printed sim render and the STL export. */
   simTileGap: number;
-  /** The circuit (SMD parts + traces) saved onto the design via ⌘/Ctrl+T in the 3D Sim. */
-  circuit: Circuit;
 }
 
 export type StateListener = (state: Readonly<AppState>) => void;
@@ -55,7 +52,6 @@ export class AppStore {
     simMaterial: "vinyl",
     simDetail: DEFAULT_MAX_SUBDIV,
     simTileGap: TILE_INSET_FRAC,
-    circuit: EMPTY_CIRCUIT,
   };
   private readonly listeners = new Set<StateListener>();
 

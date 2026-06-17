@@ -11,7 +11,6 @@ describe("model/app-store", () => {
       simMaterial: "vinyl",
       simDetail: 0,
       simTileGap: 0.16,
-      circuit: { components: [], traces: [] },
     });
   });
 

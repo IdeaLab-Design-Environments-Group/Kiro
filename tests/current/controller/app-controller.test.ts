@@ -112,20 +112,6 @@ class SimModalMock {
   onGapChange(cb: (g: number) => void): void {
     this.gapListener = cb;
   }
-
-  onSaveCircuit(cb: () => void): void {
-    this.saveCircuitListener = cb;
-  }
-
-  saveCircuitListener: (() => void) | null = null;
-
-  getCircuit(): { components: unknown[]; traces: unknown[] } {
-    return { components: [], traces: [] };
-  }
-
-  getCircuitStl(): null {
-    return null;
-  }
 }
 
 type ExportProviderFn = () => unknown;
@@ -133,7 +119,6 @@ type ExportProviderFn = () => unknown;
 class ExportModalMock {
   provider: ExportProviderFn | null = null;
   stlProvider: ((h: number | null, d: number | null) => unknown) | null = null;
-  circuitProvider: (() => unknown) | null = null;
   enabledCalls: boolean[] = [];
 
   setProvider(provider: ExportProviderFn): void {
@@ -142,10 +127,6 @@ class ExportModalMock {
 
   setStlProvider(provider: (h: number | null, d: number | null) => unknown): void {
     this.stlProvider = provider;
-  }
-
-  setCircuitProvider(provider: () => unknown): void {
-    this.circuitProvider = provider;
   }
 
   setEnabled(enabled: boolean): void {

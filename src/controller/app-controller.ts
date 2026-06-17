@@ -61,42 +61,19 @@ export class AppController {
     this.sim.onDetailChange((detail) => this.store.update({ simDetail: detail }));
     // Likewise the sim's Gap slider: store it so the STL export uses the same inter-tile gap.
     this.sim.onGapChange((gap) => this.store.update({ simTileGap: gap }));
-    // ⌘/Ctrl+T in the sim saves the routed circuit ONTO the design: mirror it into state and attach
-    // it to the loaded FKLD object (under `fkld:circuit`) so it travels with the design.
-    this.sim.onSaveCircuit(() => {
-      const circuit = this.sim.getCircuit();
-      const { model, viewerShown } = this.store.getState();
-      const target = viewerShown?.object ?? (model?.kind === "fold" ? model.object : null);
-      if (target) (target as Record<string, unknown>)["fkld:circuit"] = circuit;
-      const n = circuit.components.length, t = circuit.traces.length;
-      this.store.update({
-        circuit,
-        status: n
-          ? { msg: `Saved ${n} part${n === 1 ? "" : "s"} + ${t} trace${t === 1 ? "" : "s"} onto the design.`, kind: "ok" }
-          : { msg: "No circuit to save yet — place parts and route traces in the 3D Sim first.", kind: "" },
-      });
-    });
 
     // SVG export targets the same source — "what you see is what you cut" (black=cut, blue=score).
     this.exporter.setProvider(() => {
       const { model, viewerShown } = this.store.getState();
       return resolveSvgExport(model, viewerShown);
     });
-    // STL export of the foldable printed-joinery tiles (inset tiles + thin hinges). Height from the
-    // menu; gap from the sim's shared `simTileGap` so export and sim render match; `DEFAULT_PRINT_SIZE`
+    // STL export of the printed tiles (pinched hexagons, matched to the sim render). Height from the
+    // menu; gap from the sim's shared `simTileGap` so export and sim match; `DEFAULT_PRINT_SIZE`
     // scales the unit-scale flat pattern to a printable mm sheet (else the export is sub-millimetre).
     this.exporter.setStlProvider((heightUnits, maxSubdiv, printSizeMm) => {
       const { model, viewerShown, simDetail, simTileGap } = this.store.getState();
       return resolveStlExport(model, viewerShown, heightUnits, maxSubdiv ?? simDetail, simTileGap, printSizeMm ?? DEFAULT_PRINT_SIZE);
     });
-    // Circuit (traces + SMD parts) authored in the 3D Sim → its OWN STL, separate from the tiles.
-    this.exporter.setCircuitProvider(() => {
-      const { model, viewerShown } = this.store.getState();
-      const name = viewerShown?.name ?? (model?.kind === "fold" ? model.name : null);
-      const base = (name ?? "kirigami").replace(/\.(fkld|fold|json|stl|obj)$/i, "") || "kirigami";
-      return this.sim.getCircuitStl(base);
-    });
-
     // The viewer can load models on its own (file picker, example dropdown, drag-drop); record
     // what it shows in the store so sim enablement/provider derive from one source of truth.
     this.viewer.onLoaded((object, name) => this.store.update({ viewerShown: { object, name } }));

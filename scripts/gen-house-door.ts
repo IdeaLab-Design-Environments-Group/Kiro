@@ -28,10 +28,7 @@ const unit = (a: V3): V3 => { const l = len(a) || 1; return [a[0] / l, a[1] / l,
 
 // ---- tunables (mm) ----------------------------------------------------------------------------
 const TILE_T = 1.6; // rigid tile thickness (the brick height v_top = v + t·n)
-const GAP = TILE_INSET_FRAC; // tile inset / hinge-gap (scale each tile about its incentre by 1−GAP)
-const HINGE_T = TILE_T * 0.35; // thin living-hinge slab — bends so the tiles fold about each shared edge
-const HINGE_SPAN = 0.6; // fraction of each shared edge the hinge bridge spans, centred
-const HINGE_OVERLAP = 0.22; // how far the hinge pokes under each tile (fraction toward incentre) to weld
+const GAP = TILE_INSET_FRAC; // pinch depth: each non-boundary edge midpoint pulls in by GAP·inradius·2 (sim "Gap")
 const FLAT_SIZE = 130; // longest bbox dim of the printable flat sheet
 const FOLDED_SIZE = 70; // longest bbox dim of the folded gallery body
 
@@ -79,10 +76,7 @@ function emitAssembly(
   for (const [a, b, c] of faces) for (const [u, w] of [[a, b], [b, c], [c, a]] as const) {
     const r = roleOf(u, w); (r === "cut" ? cuts++ : r === "merge" ? folds++ : boundary++);
   }
-  const vs = buildFoldableJoinery(faces, P, roleOf, {
-    thickness: TILE_T, gap: GAP, hingeThickness: HINGE_T, hingeSpan: HINGE_SPAN, hingeOverlap: HINGE_OVERLAP, layout,
-    assignmentOf: (a, b) => assignOf.get(ekey(a, b)),
-  });
+  const vs = buildFoldableJoinery(faces, P, roleOf, { thickness: TILE_T, gap: GAP, layout });
   for (let i = 0; i + 2 < vs.length; i += 3) facet(vs[i], vs[i + 1], vs[i + 2]);
   out.push(`endsolid ${outName}`);
   writeFileSync(resolve(root, "public/examples", `${outName}.stl`), out.join("\n") + "\n");
@@ -93,7 +87,7 @@ function emitAssembly(
   return { facets, tiles: faces.length, cuts: cuts / 2 | 0, folds: folds / 2 | 0, boundary, nonManifoldEdges: nonManifold, volume: vol6 / 6 };
 }
 
-for (const name of ["house", "house-door"] as const) {
+for (const name of ["house", "house-door", "barn", "windmill"] as const) {
   const mesh = parseMesh(readFileSync(resolve(root, `public/examples/${name}.stl`), "utf8"), "stl");
   const fkld = kirigamize(mesh).fkld as Record<string, unknown>;
   writeFileSync(resolve(root, "public/examples", `${name}.fkld`), JSON.stringify(fkld));

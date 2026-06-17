@@ -1,6 +1,5 @@
 import type { SvgExportPayload } from "../model/fkld-svg-export.js";
 import { DEFAULT_PRINT_SIZE, type StlExport } from "../model/stl-export.js";
-import type { CircuitStl } from "../model/circuit-export.js";
 
 /** Returns the export payload for the current pattern when the modal opens, or null if none. */
 export type ExportProvider = () => SvgExportPayload | null;
@@ -9,8 +8,6 @@ export type ExportProvider = () => SvgExportPayload | null;
  * sheet size (mm, longest flat dimension — the flat pattern has no inherent scale). Nulls → defaults.
  */
 export type StlProvider = (heightUnits: number | null, maxSubdiv: number | null, printSizeMm: number | null) => StlExport | null;
-/** Builds the separate circuit (traces + parts) STL from the sim's current placement, or null. */
-export type CircuitProvider = () => CircuitStl | null;
 
 /**
  * "Export SVG" trigger + modal for vinyl/Cricut cutting. Opening pulls a fresh {@link SvgExportPayload}
@@ -30,10 +27,8 @@ export class ExportModal {
   private readonly stlHeightInput: HTMLInputElement;
   private readonly stlHeightUnit: HTMLElement;
   private readonly stlDetailInput: HTMLInputElement;
-  private readonly circuitBtn: HTMLButtonElement;
   private provider: ExportProvider | null = null;
   private stlProvider: StlProvider | null = null;
-  private circuitProvider: CircuitProvider | null = null;
   private payload: SvgExportPayload | null = null;
 
   constructor() {
@@ -76,7 +71,6 @@ export class ExportModal {
             <input type="number" class="export-stl-detail" min="0" max="4" step="1" />
           </label>
           <button type="button" class="export-stl-btn">Tiles (STL)</button>
-          <button type="button" class="export-circuit-btn">Circuit (STL)</button>
         </footer>
       </div>
     `;
@@ -94,12 +88,10 @@ export class ExportModal {
     this.stlHeightInput = this.overlay.querySelector(".export-stl-height")!;
     this.stlHeightUnit = this.overlay.querySelector(".export-stl-unit")!;
     this.stlDetailInput = this.overlay.querySelector(".export-stl-detail")!;
-    this.circuitBtn = this.overlay.querySelector(".export-circuit-btn")!;
 
     this.zipBtn.addEventListener("click", () => this.downloadZip());
     this.combinedBtn.addEventListener("click", () => this.downloadCombined());
     this.stlBtn.addEventListener("click", () => this.downloadStl());
-    this.circuitBtn.addEventListener("click", () => this.downloadCircuit());
     this.overlay.querySelector(".sim-modal-close")!.addEventListener("click", () => this.close());
     this.overlay.addEventListener("click", (e) => {
       if (e.target === this.overlay) this.close();
@@ -121,10 +113,6 @@ export class ExportModal {
     this.stlProvider = provider;
   }
 
-  setCircuitProvider(provider: CircuitProvider): void {
-    this.circuitProvider = provider;
-  }
-
   /** Enable/disable the Export button (only when there's a cuttable pattern on screen). */
   setEnabled(enabled: boolean): void {
     this.trigger.disabled = !enabled;
@@ -142,7 +130,6 @@ export class ExportModal {
       this.stlHeightUnit.textContent = stlDefault.unit;
       this.stlDetailInput.value = String(stlDefault.maxSubdiv);
     }
-    this.circuitBtn.disabled = !(this.circuitProvider?.() ?? null); // only when parts are placed in the sim
     this.overlay.hidden = false;
     if (!this.payload) {
       this.previews.cut.innerHTML = this.previews.score.innerHTML = this.previews.both.innerHTML = "";
@@ -182,12 +169,6 @@ export class ExportModal {
     const rawS = parseFloat(this.stlSizeInput.value);
     const size = Number.isFinite(rawS) && rawS > 0 ? rawS : null; // null → builder's print-size default
     const stl = this.stlProvider?.(height, detail, size) ?? null;
-    if (!stl) return;
-    download(stl.filename, new Blob([stl.text], { type: "model/stl" }));
-  }
-
-  private downloadCircuit(): void {
-    const stl = this.circuitProvider?.() ?? null;
     if (!stl) return;
     download(stl.filename, new Blob([stl.text], { type: "model/stl" }));
   }

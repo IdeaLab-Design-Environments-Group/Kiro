@@ -1,21 +1,20 @@
 # Subsystem: Printed Tile STL Export
 
 Printed tile STL export turns the currently displayed FOLD/FKLD flat pattern
-into the **foldable printed joinery**: rigid tiles you fold up from flat
+into the **printed-kirigami tiles** — the same pinched hexagons the 3D Sim shows
 (rotating units). It is the mechanical counterpart to SVG cut/score export.
 
 ## Purpose
 
-The export path produces an ASCII STL for 3D-printing the flat pattern as rigid
-tiles joined by thin living hinges. Each triangular face becomes a rigid tile,
-**inset** (scaled about its incentre by the gap) so there is a gap around every
-tile; a thin **living-hinge bridge** spans every shared fold/facet edge so the
-tiles rotate about it, and `C` cuts stay open. Print flat, fold up to the 3D
-shape. Tiles and hinges are individually closed solids (they overlap at the hinge
-welds, which the slicer unions).
+The export path produces an ASCII STL whose tiles match the 3D-Sim render exactly.
+Each triangular face becomes a hexagonal tile `[A, mAB, B, mBC, C, mCA]` extruded
+to a closed prism. The three **corners stay full** — neighbouring tiles meet there
+(the pinpoint pivots). Every edge that is **not an outer boundary** (interior
+fold/facet edges *and* `C` cuts) has its midpoint **pinched inward** by
+`gap·inradius·2`, opening the diamond between tiles; boundary edges stay straight.
 
-The joinery geometry lives in `src/model/printed-joinery.ts` and is shared with
-the 3D Sim printed render and the house/door generator, so the rule holds:
+The tile geometry lives in `src/model/printed-joinery.ts` (`buildFoldableJoinery`),
+matched to the sim's `updatePrintedTiles`, so the rule holds:
 
 ```text
 what you see as printed tiles is what you export as STL
@@ -50,24 +49,24 @@ viewer when it differs from the file sitting in the convert panel.
 `buildStlExport` reads `edges_assignment` and counts how many faces share each
 edge, then classifies every face edge (`edgeRole` in `printed-joinery.ts`):
 
-1. assignment `C` → **cut** (gap stays open — no hinge);
-2. else shared by one face → **boundary** (free outer edge, incl. `B` — no hinge);
-3. else (`M`/`V`/`F`, shared by two faces) → **merge** (bridged by a thin hinge).
+1. assignment `C` → **cut** (midpoint pinched → the diamond opening);
+2. else shared by one face → **boundary** (incl. `B` — midpoint stays straight);
+3. else (`M`/`V`/`F`, shared by two faces) → **merge** (interior — also pinched).
 
-There is no adaptive subdivision; the `Detail` control is inert (the export
-reports `maxSubdiv = 0`).
+So every non-boundary edge pinches (interior folds *and* cuts), exactly as the
+sim. There is no adaptive subdivision; the `Detail` control is inert
+(`maxSubdiv = 0`).
 
 ## Geometry Contract
 
 - Input coordinates are flat `vertices_coords`; z is read if present but the
   normal case is z = 0, extruded +height.
-- N-gon faces fan-triangulate; the inner fan edges are interior → `merge`.
-- Each face becomes a rigid tile inset (scaled about its incentre by `1 − gap`).
-- A thin living-hinge bridge spans every `merge` edge (`hingeThickness`,
-  `hingeSpan`, `hingeOverlap` in `stl-export.ts`); `cut`/`boundary` get none.
-- The export is ASCII STL; tiles + hinges are individually closed solids that
-  overlap at the hinge welds (the slicer unions them).
-- Returns `null` when the fold has no faces or no coordinates.
+- N-gon faces fan-triangulate; the inner fan edges are interior → pinched.
+- Each face becomes a hexagonal prism `[A, mAB, B, mBC, C, mCA]`; corners full.
+- Non-boundary edge midpoints pinch inward by `gap·inradius·2` (the sim formula).
+- Each tile is a closed prism; adjacent tiles share full corners (pivots), so the
+  mesh is non-manifold only at those pivots — the rotating-units nature.
+- The export is ASCII STL. Returns `null` when the fold has no faces/coords.
 
 ## Controls
 
@@ -75,7 +74,7 @@ reports `maxSubdiv = 0`).
 | --- | --- |
 | Tile height | Extrusion height in model units. Null or <= 0 uses a bbox-relative default. |
 | Detail | Inert for the connected joinery (no subdivision); kept for API compatibility. |
-| Gap/inset | Tile inset / hinge-gap (tiles scale about their incentre by `1 − gap`), shared with the printed sim. |
+| Gap/inset | Pinch depth — each non-boundary edge midpoint pulls in by `gap·inradius·2`, shared with the printed sim. |
 
 ## Failure Modes
 

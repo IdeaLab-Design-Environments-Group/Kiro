@@ -1,23 +1,16 @@
 /**
- * STL export — the 3D-printed tiles in the **foldable printed-kirigami joinery** (the rotating-units
- * structure you fold up from flat, like `kirigamish_parachuteish_180mm.stl`). Every triangular face is
- * a rigid tile, inset so there is a gap around it; a thin living-hinge bridge spans every shared
- * fold/facet edge so the tiles rotate about it, and "C" cuts stay open. The geometry is shared with
- * the sim render and the house/door generator via `printed-joinery.ts`, so what you see is what you cut.
+ * STL export — the 3D-printed tiles, matched to the 3D-Sim render (`sim-canvas.ts`
+ * `updatePrintedTiles`): one hexagonal prism per face `[A, mAB, B, mBC, C, mCA]`, corners full (the
+ * pinpoint pivots where neighbouring tiles meet), every non-boundary edge midpoint pinched inward to
+ * open the diamond (interior folds AND "C" cuts), boundary edges straight. The geometry is shared with
+ * the house/door generator via `printed-joinery.ts`, so what you see in the sim is what you cut.
  *
  * Coordinates are the flat pattern `vertices_coords` (z = 0 base, extruded +height). The "Gap"
- * (`inset`) is the tile inset / hinge-gap width, kept in lock-step with the sim's Gap slider.
+ * (`inset`) is the pinch depth (`gap·inradius·2`), kept in lock-step with the sim's Gap slider.
  */
 import type { FoldFile } from "./fold-file.js";
 import { buildFoldableJoinery, edgeRole, type EdgeRole, type V3 } from "./printed-joinery.js";
 import { TILE_INSET_FRAC } from "./tile-subdiv.js";
-
-/** Hinge slab thickness as a fraction of the tile thickness (thin enough to bend). */
-const HINGE_THICK_FRAC = 0.35;
-/** Fraction of each shared edge the hinge bridge spans, centred. */
-const HINGE_SPAN = 0.6;
-/** How far the hinge pokes under each tile (fraction of inset-corner→incentre) so it welds in. */
-const HINGE_OVERLAP = 0.22;
 
 export interface StlExport {
   filename: string;
@@ -106,10 +99,7 @@ export function buildStlExport(
     for (let k = 1; k + 1 < face.length; k++) tris.push([face[0], face[k], face[k + 1]]);
   });
 
-  const vs = buildFoldableJoinery(tris, coordsXYZ, roleOf, {
-    thickness: h, gap, hingeThickness: h * HINGE_THICK_FRAC, hingeSpan: HINGE_SPAN, hingeOverlap: HINGE_OVERLAP, layout: "flat",
-    assignmentOf: (a, b) => assignOf.get(edgeKey(a, b)),
-  });
+  const vs = buildFoldableJoinery(tris, coordsXYZ, roleOf, { thickness: h, gap, layout: "flat" });
   const out: string[] = [`solid ${baseName}`];
   for (let i = 0; i + 2 < vs.length; i += 3) writeFacet(out, vs[i], vs[i + 1], vs[i + 2]);
   out.push(`endsolid ${baseName}`);

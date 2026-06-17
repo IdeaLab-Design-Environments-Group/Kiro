@@ -53,16 +53,22 @@ export const ORIGAMI_PARAMS: SolverParams = {
 export const PRINTED_PARAMS: SolverParams = {
   ...ORIGAMI_PARAMS,
   EA: 40, // stiffer panels (dt auto-shrinks); modest so the explicit integrator stays stable
-  // The RATIO is what matters: faces (kFacet/kFace) ≫ fold hinges (kFold) ⇒ rigid tiles whose only
-  // bending happens in the soft cloth at the bare hinge lines. Kept modest in absolute terms because
-  // computeDt only tracks axial stiffness — large crease/face/barrier springs would destabilize.
+  // Rigid POLYGON panels: each FKLD polygon is triangulated with interior facet ("F") diagonals; the
+  // printed sheet must fold only at the real M/V panel hinges, NOT bend along those facet lines like
+  // the vinyl sim. The facet stiffness `kFacet` ≫ `kFold` is what holds a polygon flat. At the old
+  // 1.0 a polygon could buckle ~110° at its facet line mid-fold (e.g. house-door); 8.0 keeps it < 10°
+  // across every example and stays stable (kFacet is torsional, so it does not shrink computeDt's
+  // axial-only step). The `rigidFacets` cross-brace below adds an axial (dt-tracked) rigidity floor.
   kFold: 0.12,
-  kFacet: 1.0,
+  kFacet: 8.0,
   kFace: 0.5,
   zeta: 1.0,
   beamDampingScale: 0.8,
   kGoal: 0.6,
   kBarrier: 1.5,
+  // Rigid polygon panels: cross-brace every facet ("F") diagonal so a polygon folds as one rigid
+  // tile and the model only hinges at the real M/V panel boundaries (not the FKLD facet lines).
+  rigidFacets: true,
 };
 
 /** Fabrication geometry for the printed thickness limit (mm). */
@@ -194,18 +200,37 @@ function assembleModel(work: WorkFold, creaseParams: CreaseParams[], params: Sol
     Math.hypot(rest[3 * a] - rest[3 * b], rest[3 * a + 1] - rest[3 * b + 1], rest[3 * a + 2] - rest[3 * b + 2]);
 
   // --- beams: one axial spring per edge (k = EA / l₀) ---
+  // Rigid-panel mode (printed): also brace every facet ("F") diagonal with an axial spring between
+  // the crease's two wing vertices. That diagonal can only change length if the polygon folds at the
+  // facet line, so the brace holds coplanar triangles together as one rigid panel — the model then
+  // hinges only at the real M/V panel boundaries. Axial, so `computeDt` keeps the step stable.
   const ev = work.edges_vertices;
+  const braces: Array<[number, number]> = [];
+  if (params.rigidFacets) {
+    for (const [, wing1, , wing2, edgeIndex, angle] of creaseParams) {
+      if (angle === 0) braces.push([wing1, wing2]); // angle 0 ⇔ facet "F" crease
+    }
+  }
+  const nBeams = ev.length + braces.length;
   const beams = {
-    count: ev.length,
-    n0: new Int32Array(ev.length),
-    n1: new Int32Array(ev.length),
-    rest: new Float32Array(ev.length),
-    k: new Float32Array(ev.length),
+    count: nBeams,
+    n0: new Int32Array(nBeams),
+    n1: new Int32Array(nBeams),
+    rest: new Float32Array(nBeams),
+    k: new Float32Array(nBeams),
   };
   for (let i = 0; i < ev.length; i++) {
     beams.n0[i] = ev[i][0];
     beams.n1[i] = ev[i][1];
     const l0 = Math.max(dist(ev[i][0], ev[i][1]), 1e-9);
+    beams.rest[i] = l0;
+    beams.k[i] = params.EA / l0;
+  }
+  for (let b = 0; b < braces.length; b++) {
+    const i = ev.length + b;
+    beams.n0[i] = braces[b][0];
+    beams.n1[i] = braces[b][1];
+    const l0 = Math.max(dist(braces[b][0], braces[b][1]), 1e-9);
     beams.rest[i] = l0;
     beams.k[i] = params.EA / l0;
   }

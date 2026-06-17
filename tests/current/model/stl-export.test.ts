@@ -1,7 +1,8 @@
 /**
- * FKLD → STL export: the 3D-printed tiles in the **foldable joinery** (`printed-joinery.ts`). Every
- * face is a rigid tile inset so there is a gap around it; a thin living-hinge bridge spans every shared
- * fold/facet edge (so the tiles fold about it) and "C" cuts stay open. Print flat, fold up.
+ * FKLD → STL export: the 3D-printed tiles (`printed-joinery.ts`), matched to the 3D-Sim render. Each
+ * face is a hexagonal tile `[A, mAB, B, mBC, C, mCA]` extruded to a closed prism; corners stay full
+ * (neighbours meet there), every non-boundary edge midpoint pinches inward (interior folds AND "C"
+ * cuts open the diamond), and outer-boundary edges stay straight. What you see in the sim is what you cut.
  */
 import { describe, it, expect } from "vitest";
 import { buildStlExport } from "../../../src/model/stl-export.js";
@@ -12,9 +13,10 @@ const countFacets = (stl: string): number => (stl.match(/facet normal/g) ?? []).
 const verts = (stl: string): V3[] =>
   [...stl.matchAll(/vertex (\S+) (\S+) (\S+)/g)].map((m) => [Number(m[1]), Number(m[2]), Number(m[3])]);
 const zSet = (vs: V3[]): number[] => [...new Set(vs.map((v) => Math.round(v[2] * 1e4) / 1e4))].sort((a, b) => a - b);
+const hasXY = (vs: V3[], x: number, y: number): boolean => vs.some((v) => Math.abs(v[0] - x) < 1e-6 && Math.abs(v[1] - y) < 1e-6);
 
-/** Every closed solid uses each directed edge once and its reverse once (tiles + hinges are each closed). */
-function allClosed(vs: V3[]): boolean {
+/** A single tile is a closed solid: every directed edge used once and its reverse once. */
+function isClosed(vs: V3[]): boolean {
   const dir = new Map<string, number>();
   const key = (p: V3): string => p.map((n) => Math.round(n * 1e3)).join(",");
   for (let i = 0; i < vs.length; i += 3)
@@ -26,7 +28,7 @@ function allClosed(vs: V3[]): boolean {
   return true;
 }
 
-describe("buildStlExport — foldable printed joinery", () => {
+describe("buildStlExport — printed tiles (sim-matched pinched hexagons)", () => {
   it("wraps the tiles in solid/endsolid and names the file", () => {
     const fold: FoldFile = { vertices_coords: [[0, 0], [10, 0], [5, 8]], faces_vertices: [[0, 1, 2]] };
     const out = buildStlExport(fold, "sq", 3)!;
@@ -36,50 +38,55 @@ describe("buildStlExport — foldable printed joinery", () => {
     expect(out.maxSubdiv).toBe(0);
   });
 
-  it("a lone triangle is one closed inset prism: base at z=0, top at the height, strictly inside the face", () => {
+  it("a lone all-boundary triangle: closed hex prism, corners full, midpoints unpinched, z=0..height", () => {
     const fold: FoldFile = { vertices_coords: [[0, 0], [10, 0], [5, 8]], faces_vertices: [[0, 1, 2]] };
-    const vs = verts(buildStlExport(fold, "t", 4)!.text);
-    expect(allClosed(vs)).toBe(true);
-    expect(zSet(vs)).toEqual([0, 4]); // a lone tile has no hinge → only base + top
-    expect(countFacets(buildStlExport(fold, "t", 4)!.text)).toBe(8); // triangular prism
-    for (const [x, y] of vs) { expect(x).toBeGreaterThan(0); expect(x).toBeLessThan(10); expect(y).toBeGreaterThan(0); expect(y).toBeLessThan(8); }
+    const out = buildStlExport(fold, "t", 4)!;
+    const vs = verts(out.text);
+    expect(isClosed(vs)).toBe(true);
+    expect(zSet(vs)).toEqual([0, 4]);
+    expect(countFacets(out.text)).toBe(24); // hex prism: 6 top + 6 bottom + 6 walls × 2 tris
+    // corners stay full; with no pinch the edge midpoints sit on their true positions
+    for (const [x, y] of [[0, 0], [10, 0], [5, 8], [5, 0], [7.5, 4], [2.5, 4]]) expect(hasXY(vs, x, y)).toBe(true);
   });
 
-  it("HINGES a shared fold edge with a thin bridge, seated on the inside of the fold per M/V/F", () => {
-    const make = (assign: string): string => buildStlExport({
-      vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
-      faces_vertices: [[0, 1, 2], [0, 2, 3]], // share edge 0–2
-      edges_vertices: [[0, 1], [1, 2], [0, 2], [2, 3], [0, 3]],
-      edges_assignment: ["B", "B", assign, "B", "B"],
-    } as FoldFile, "t", 2)!.text;
-    // height 2 → hinge slab thickness 0.35·2 = 0.7. Mountain seats at the bottom, valley at the top,
-    // flat at mid — so the rigid tiles pivot about the hinge on the inside of the fold.
-    expect(allClosed(verts(make("M")))).toBe(true);
-    expect(countFacets(make("M"))).toBe(2 * 8 + 12); // 2 inset prisms + 1 hinge box
-    expect(zSet(verts(make("M")))).toEqual([0, 0.7, 2]); // mountain → bottom band [0, 0.7]
-    expect(zSet(verts(make("V")))).toEqual([0, 1.3, 2]); // valley → top band [1.3, 2]
-    expect(zSet(verts(make("F")))).toEqual([0, 0.65, 1.35, 2]); // flat → mid band [0.65, 1.35]
+  it("PINCHES a 'C' cut edge inward, leaving boundary edges straight (corners stay full)", () => {
+    const fold: FoldFile = {
+      vertices_coords: [[0, 0], [10, 0], [5, 8]],
+      faces_vertices: [[0, 1, 2]],
+      edges_vertices: [[0, 1], [1, 2], [2, 0]],
+      edges_assignment: ["C", "B", "B"], // base 0–1 is a cut → pinched; the others are boundary
+    };
+    const vs = verts(buildStlExport(fold, "t", 2)!.text);
+    expect(hasXY(vs, 5, 0)).toBe(false); // the cut midpoint left its true position (5,0), pinched inward (y>0)
+    expect(vs.some(([x, y]) => Math.abs(x - 5) < 1e-6 && y > 0.1 && y < 4)).toBe(true);
+    expect(hasXY(vs, 7.5, 4)).toBe(true); // boundary midpoints stay straight
+    expect(hasXY(vs, 2.5, 4)).toBe(true);
+    for (const [x, y] of [[0, 0], [10, 0], [5, 8]]) expect(hasXY(vs, x, y)).toBe(true); // corners full
   });
 
-  it("does NOT hinge a cut edge: the gap stays open (no bridge, no mid-height layer)", () => {
+  it("PINCHES interior fold edges too (matches the sim): a shared M/V/F edge opens", () => {
     const fold: FoldFile = {
       vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
-      faces_vertices: [[0, 1, 2], [0, 2, 3]],
+      faces_vertices: [[0, 1, 2], [0, 2, 3]], // share interior edge 0–2
       edges_vertices: [[0, 1], [1, 2], [0, 2], [2, 3], [0, 3]],
-      edges_assignment: ["B", "B", "C", "B", "B"], // 0–2 is a cut → stays open
+      edges_assignment: ["B", "B", "M", "B", "B"], // 0–2 is an interior mountain fold → pinched
     };
-    const out = buildStlExport(fold, "t", 2)!;
-    expect(countFacets(out.text)).toBe(2 * 8); // two inset tiles only, no hinge
-    expect(zSet(verts(out.text))).toEqual([0, 2]); // no hinge layer
+    const vs = verts(buildStlExport(fold, "t", 2)!.text);
+    expect(hasXY(vs, 5, 5)).toBe(false); // the shared interior edge's true midpoint (5,5) is pinched away on both tiles
+    expect(hasXY(vs, 0, 0)).toBe(true); // shared corners stay full (the pivots)
+    expect(hasXY(vs, 10, 10)).toBe(true);
   });
 
-  it("a wider Gap shrinks each tile (corners pull further toward the centroid)", () => {
-    const fold: FoldFile = { vertices_coords: [[0, 0], [10, 0], [5, 8]], faces_vertices: [[0, 1, 2]] };
-    const minCornerDistToCentroid = (gap: number): number => {
-      const c: V3 = [5, 8 / 3, 0];
-      return Math.min(...verts(buildStlExport(fold, "t", 1, null, gap)!.text).filter((v) => v[2] === 0).map((v) => Math.hypot(v[0] - c[0], v[1] - c[1])));
+  it("a wider Gap pinches the cut midpoint further inward", () => {
+    const fold: FoldFile = {
+      vertices_coords: [[0, 0], [10, 0], [5, 8]],
+      faces_vertices: [[0, 1, 2]],
+      edges_vertices: [[0, 1], [1, 2], [2, 0]],
+      edges_assignment: ["C", "B", "B"],
     };
-    expect(minCornerDistToCentroid(0.4)).toBeLessThan(minCornerDistToCentroid(0.05)); // bigger gap → smaller tile
+    // the pinched cut midpoint is the vertex at x=5 with 0 < y < centroid (8/3≈2.67); exclude the centroid
+    const midY = (gap: number): number => Math.max(...verts(buildStlExport(fold, "t", 1, null, gap)!.text).filter(([x, y]) => Math.abs(x - 5) < 1e-6 && y > 0.01 && y < 2.6).map(([, y]) => y));
+    expect(midY(0.3)).toBeGreaterThan(midY(0.05)); // bigger gap → deeper pinch
   });
 
   it("uses a size-relative default height when none is given (≈ 2% of the bbox diagonal)", () => {
@@ -101,7 +108,7 @@ describe("buildStlExport — foldable printed joinery", () => {
       faces_vertices: [[0, 1, 2]],
       file_frames: [{ frame_classes: ["foldedForm"], vertices_coords: [[0, 0, 0], [10, 0, 0], [5, 4, 7]] }],
     } as unknown as FoldFile;
-    expect(zSet(verts(buildStlExport(fold, "t", 2)!.text))).toEqual([0, 2]); // never the folded z=4/7
+    expect(zSet(verts(buildStlExport(fold, "t", 2)!.text))).toEqual([0, 2]);
   });
 
   it("returns null when there are no faces", () => {
