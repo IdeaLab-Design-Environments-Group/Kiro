@@ -12,6 +12,9 @@ controller.
 | `src/view/sim-canvas.ts` | `SimCanvas` | Lazy-loaded rendering surface used by `SimModal`. |
 | `src/controller/app-controller.ts` | providers | Supplies modal providers and enabled state. |
 
+For the export modal's specific SVG/STL/circuit provider routing, see
+`export-modal.md`.
+
 ## Shared Pattern
 
 Both modals use:
@@ -61,6 +64,8 @@ Downloads:
 
 - ZIP: registered cut and score SVG files.
 - Combined SVG: single color-coded file.
+- Tiles STL: separated 3D-printable tiles.
+- Circuit STL: separate traces and SMD component bodies.
 
 The modal creates object URLs only at download time and revokes them
 immediately after click.
@@ -84,4 +89,3 @@ Modal tests should assert:
 - empty provider shows a useful status;
 - close hides overlay and stops resources;
 - download buttons are disabled without payload.
-

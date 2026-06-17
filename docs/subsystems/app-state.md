@@ -1,7 +1,8 @@
 # Subsystem: App State
 
-The app state subsystem is deliberately small. It stores only what the UI needs
-to coordinate the loaded object and status line.
+The app state subsystem stores only UI coordination state: the loaded object,
+status line, viewer source, sim/export material settings, and saved circuit
+overlay.
 
 ## Files
 
@@ -18,6 +19,11 @@ to coordinate the loaded object and status line.
 interface AppState {
   model: LoadedModel | null;
   status: Status;
+  viewerShown: { object: FoldFile; name: string } | null;
+  simMaterial: "vinyl" | "printed";
+  simDetail: number;
+  simTileGap: number;
+  circuit: Circuit;
 }
 ```
 
@@ -30,6 +36,16 @@ interface AppState {
 
 - `msg`: user-facing message;
 - `kind`: `"" | "ok" | "bad"`.
+
+`viewerShown` is the model currently displayed by the FKLD viewer iframe. The
+controller uses it before `model` for simulation and export so the active viewer
+contents drive downstream workflows.
+
+`simMaterial`, `simDetail`, and `simTileGap` mirror controls in the 3D Sim. STL
+export reads the same values so printed-tile downloads match the preview.
+
+`circuit` stores the SMD parts and traces saved from the 3D Sim circuit editor.
+The full simulation model is not stored here.
 
 ## Store Contract
 
@@ -59,6 +75,8 @@ deterministic.
 AppState
   -> deriveFacts(...)
   -> summarizeFkldForDisplay(...)
+  -> canSimulate(viewerShown ?? model)
+  -> export enablement from viewerShown ?? model
   -> view render methods
 ```
 
@@ -86,5 +104,5 @@ If durable state is necessary:
 - Storing duplicate metadata summaries.
 - Storing DOM nodes.
 - Storing simulation model instances in `AppStore`.
+- Storing SVG/STL export payloads; providers should build those on demand.
 - Storing generated `dist/` paths.
-

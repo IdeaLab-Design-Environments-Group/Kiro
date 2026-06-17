@@ -69,9 +69,11 @@ src/
       shaders.ts
     index.ts
     model.ts
+    origami-import.ts
     scene.ts
     solver.ts
     stabilize.ts
+    svg-import.ts
     vec3.ts
   view/
     convert-panel.ts
@@ -180,7 +182,7 @@ Rules:
 | `convert-panel.ts` | File dropzone, status line, Derived rows. |
 | `metadata-panel.ts` | FKLD metadata rendering. |
 | `viewer-frame.ts` | Embedded FKLD viewer iframe and postMessage bridge. |
-| `export-modal.ts` | SVG export modal with previews and downloads. |
+| `export-modal.ts` | Export modal for SVG cut/score, printed tile STL, and circuit STL downloads. |
 | `pattern-editor-modal.ts` | Interactive crease-pattern grid editor (secondary design path): tool palette, presets, paints a `PatternGrid`, emits `onUse(grid)` + a download serializer. |
 | `header-actions.ts` | Header buttons and intent callbacks. |
 | `sim-modal.ts` | 3D simulation modal shell and fold slider. |
@@ -220,6 +222,10 @@ bistable star tiling generation, surface-fit relaxation, bistable bar placement,
 and FKLD emission for the `Bistable star tiling` method selector path. See
 `docs/subsystems/bst-pipeline.md`.
 
+`src/pipeline/cutfold25d.ts` is the other sibling route. It generates 2.5D
+orthogonal cut/fold signage from bitmap/text height maps and emits guided FKLD
+through `src/services/pattern-service.ts`. See `docs/subsystems/cutfold25d.md`.
+
 Rules:
 
 - No DOM.
@@ -242,12 +248,21 @@ Rules:
 | `stabilize.ts` | Solver stabilization/settling helpers. |
 | `build.ts` | Guided AKDE scene builder. |
 | `fold-adapter.ts` | FOLD/FKLD to simulation scene adapter. |
+| `origami-import.ts` | FOLD/FKLD preprocessing result to bar-and-hinge model assembly, fold-angle policy, and material params. |
 | `scene.ts` | Guided/free scene selection. |
+| `svg-import.ts` | Origami Simulator SVG crease-pattern importer used by generated examples. |
 | `gpu/pack.ts` | Pack model into GPU textures. |
 | `gpu/shaders.ts` | GLSL force/integration shaders. |
 | `gpu/gpu-solver.ts` | Three.js GPU computation wrapper. |
 | `gpu/index.ts` | Browser-only GPU barrel — the only sanctioned GPU entry point. |
 | `index.ts` | Public Node-safe simulation exports (never re-exports gpu/ or anything importing `three`). |
+
+`src/sim/origami-import.ts` is the central arbitrary FOLD/FKLD simulation
+import path. `src/sim/svg-import.ts` is a DOM-free compatibility importer for
+Origami Simulator SVG crease patterns. It belongs in `sim/` because it
+reproduces the upstream simulator's front-end pattern loader and feeds the same
+fold engine. See `docs/subsystems/origami-import.md` and
+`docs/subsystems/svg-import.md`.
 
 Rules:
 

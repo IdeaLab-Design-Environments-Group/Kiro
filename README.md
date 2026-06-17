@@ -93,6 +93,12 @@ npm run preview   # serve the production build
 | `docs/subsystems/cutfold25d.md` | 2.5D orthogonal cut-and-fold signage generator. |
 | `docs/subsystems/bst-pipeline.md` | Bistable star tiling pipeline and surface-fit route. |
 | `docs/subsystems/circuit-editor.md` | Circuit authoring, trace routing, and circuit STL export. |
+| `docs/subsystems/export-modal.md` | Export modal provider lifecycle for SVG, tile STL, and circuit STL downloads. |
+| `docs/subsystems/stl-export.md` | Printed tile STL export and adaptive subdivision. |
+| `docs/subsystems/pattern-editor.md` | Paintable crease-grid editor and FKLD emission route. |
+| `docs/subsystems/svg-import.md` | Origami Simulator SVG importer and RES Tower generator. |
+| `docs/subsystems/origami-import.md` | FOLD/FKLD preprocessing and solver model assembly for simulation. |
+| `docs/subsystems/example-generators.md` | Scripts that regenerate bundled public examples. |
 
 ## Files
 

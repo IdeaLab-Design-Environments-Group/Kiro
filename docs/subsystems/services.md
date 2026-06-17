@@ -78,7 +78,7 @@ settle into the wrong symmetric branch.
 
 ## Sim Scene Service
 
-`resolveSimScene(model, shown)` implements the policy:
+`resolveSimScene(model, shown, material)` implements the policy:
 
 ```text
 simulate viewerShown first, otherwise loaded fold model
@@ -106,7 +106,8 @@ export viewerShown first, otherwise loaded fold model
 ```
 
 The caller provides tile height/detail settings from the export modal or the
-shared sim detail state.
+shared sim detail state. The controller also passes the shared sim tile gap so
+the printed-tile STL export matches the 3D Sim printed material preview.
 
 ## Adding a Service
 

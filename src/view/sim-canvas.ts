@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
-import { type BaryTri, DEFAULT_MAX_SUBDIV, DETAIL_OFFSET, foldDepths, MAX_TILE_GAP, MIN_TILE_GAP, subdivBary, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
+import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import { type Circuit, type ComponentKind, EMPTY_CIRCUIT } from "../model/circuit.js";
 import { type ComponentGeom, locateFlat, resolveCircuit, type TraceGeom, TRACE_W } from "../model/circuit-geometry.js";
 
@@ -120,20 +120,21 @@ export class SimCanvas {
   private thickAttr: THREE.BufferAttribute | null = null;
   private thickMesh: THREE.Mesh | null = null;
   private tileFaces: number[] | null = null;
-  private tileBary: BaryTri[][] | null = null; // per face: its sub-tiles (fold-adaptive) in barycentric coords
-  private tileDetail = DEFAULT_MAX_SUBDIV; // max adaptive subdivision; shared with the STL export
+  private tileDetail = DEFAULT_MAX_SUBDIV; // max adaptive subdivision; shared with the STL export (export only)
   private tileInset = TILE_INSET_FRAC; // gap: tile shrink toward centroid (the "Gap" slider); shared with export
   private tileT = 0; // one-sided extrude thickness (model units)
   private tileSign: Float32Array | null = null; // per-face ±1: extrude side, made consistent across mixed winding
-  // PyKirigami-style SPHERICAL joints (printed mode): little TPU connectors pinning tiles that meet
-  // only at a corner POINT — rotating-units pivots (e.g. the rotating-triangles kirigami). Tiles that
-  // share a fold EDGE are already tied by the continuous TPU backing; cuts stay OPEN. This is what
-  // holds a printed cut-pattern together as proper kirigami (cf. PyKirigami Fig. 2c). Detected by
-  // geometric coincidence in the rest pose (the solver net splits shared corners), rebuilt each frame.
-  private sphPivots: number[][] | null = null; // each pivot: the net-vertices coincident at one point
-  private jointMesh: THREE.InstancedMesh | null = null;
-  private jointGeo: THREE.BufferGeometry | null = null;
-  private jointMat: THREE.MeshStandardMaterial | null = null;
+  // PyKirigami "separate bricks joined at edges/corners" look: each logical tile is a full brick, and
+  // every JOIN shows a visible seam/gap. Per net-tri, per edge:
+  //  • MERGE (true): a shared FACET ("F") edge — internal to one logical tile → no wall, kept full.
+  //  • SEAM  (true): an M/V fold-hinge or a "C" cut — a real join → tile recedes (the seam/gap) + wall.
+  //  • otherwise: boundary → kept full + wall (clean outer side). Recomputed on the live mesh.
+  private tileEdgeMerge: boolean[][] | null = null;
+  private tileEdgeSeam: boolean[][] | null = null;
+  // Per net-tri, which of its three CORNERS is a shared pivot (≥2 tiles meet at the point, off any
+  // shared edge — rotating-units kirigami). Kept FULL so the bricks join there at the corner (the
+  // spherical-joint / Kiri-Spoon ligament).
+  private tilePivotCorner: boolean[][] | null = null;
   // Circuit overlay: SMD parts + traces placed on the tiles, riding the fold (see model/circuit*).
   private readonly circuitGroup = new THREE.Group();
   private circuit: Circuit = EMPTY_CIRCUIT;
@@ -508,14 +509,15 @@ export class SimCanvas {
   }
 
   /**
-   * Build the 3D-printed thick-tile layer: one solid prism per face, inset from its fold edges so
-   * the bare-fabric hinge gap shows. The vertex buffer is non-indexed and rebuilt every frame from
-   * the live folded positions (`updatePrintedTiles`) since the extrusion follows each face normal.
+   * Build the 3D-printed thick-tile layer: one solid prism per (triangular) face. A tile is inset
+   * per-EDGE — kept full at fold edges (M/V/F) so neighbouring tiles meet into one structure, pulled
+   * in at cut/boundary edges so those open. The non-indexed buffer is rebuilt every frame from the
+   * live folded positions (`updatePrintedTiles`) since the inset + extrusion follow each face frame.
    */
   private buildPrintedTiles(net: FoldNet): void {
     if (!this.fold) return;
     const pos = this.fold.model.position;
-    // Visual thickness/gap from the model size (physics closure is ratio-based, set elsewhere).
+    // Visual thickness from the model size (physics closure is ratio-based, set elsewhere).
     let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
     for (let i = 0; i < pos.length; i += 3) {
       minX = Math.min(minX, pos[i]); maxX = Math.max(maxX, pos[i]);
@@ -524,11 +526,10 @@ export class SimCanvas {
     }
     const diag = Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) || 1;
     // One-sided: the full tile thickness extrudes to ONE side of the hinge plane (the +normal face);
-    // the cloth surface mesh stays at the plane as the backing. (Was centered ±thick/2.)
+    // the cloth surface mesh stays at the plane as the backing.
     this.tileT = diag * TILE_THICK_FRAC;
 
-    // A detail change rebuilds just this layer — drop the previous tile mesh first.
-    if (this.thickMesh) {
+    if (this.thickMesh) { // rebuild just this layer — drop the previous tile mesh first
       this.group.remove(this.thickMesh);
       this.thickGeo?.dispose();
       (this.thickMesh.material as THREE.Material).dispose();
@@ -536,36 +537,66 @@ export class SimCanvas {
     }
 
     this.tileFaces = net.faces.flat();
-    const nTris = this.tileFaces.length / 3;
-    // Kirigamized meshes can have mixed face winding (some faces' raw normals point the opposite
-    // way), which would extrude their tiles to the wrong side → tiles on both faces, cloth in the
-    // middle. Pin every tile to ONE side: compute a per-face sign vs the mesh's mean (flat) normal,
-    // so flipped faces extrude with the majority. Computed once from the flat rest pose.
-    this.tileSign = new Float32Array(nTris);
-    {
-      const r = this.fold.model.rest;
-      const ff = this.tileFaces;
-      const nrm: number[][] = [];
-      let mx = 0, my = 0, mz = 0;
-      for (let f = 0; f < ff.length; f += 3) {
-        const a = ff[f] * 3, b = ff[f + 1] * 3, c = ff[f + 2] * 3;
-        const nx = (r[b + 1] - r[a + 1]) * (r[c + 2] - r[a + 2]) - (r[b + 2] - r[a + 2]) * (r[c + 1] - r[a + 1]);
-        const ny = (r[b + 2] - r[a + 2]) * (r[c] - r[a]) - (r[b] - r[a]) * (r[c + 2] - r[a + 2]);
-        const nz = (r[b] - r[a]) * (r[c + 1] - r[a + 1]) - (r[b + 1] - r[a + 1]) * (r[c] - r[a]);
-        nrm.push([nx, ny, nz]); mx += nx; my += ny; mz += nz;
+    const ff = this.tileFaces;
+    const nTris = ff.length / 3;
+    const r = this.fold.model.rest;
+    // Per-tile extrude side: pin every tile to ONE side vs the mesh's mean (flat) normal so mixed
+    // winding doesn't flip some tiles. And per-tile fold flags: an edge is a fold (kept full) iff it
+    // is shared by two faces AND assigned M/V/F; cut/boundary edges are pulled in (the kirigami opens).
+    const edgeFaces = new Map<string, number>();
+    net.faces.forEach((f) => {
+      for (let k = 0; k < f.length; k++) {
+        const u = f[k], w = f[(k + 1) % f.length], key = u < w ? `${u}_${w}` : `${w}_${u}`;
+        edgeFaces.set(key, (edgeFaces.get(key) ?? 0) + 1);
       }
-      for (let i = 0; i < nrm.length; i++) {
-        const [nx, ny, nz] = nrm[i];
-        this.tileSign[i] = nx * mx + ny * my + nz * mz >= 0 ? 1 : -1;
-      }
+    });
+    const assign = new Map<string, string>();
+    for (const e of net.edges) assign.set(e.a < e.b ? `${e.a}_${e.b}` : `${e.b}_${e.a}`, e.assignment);
+    // MERGE = a shared FACET edge (internal to a logical tile): coplanar, no join → no wall, full.
+    const isMerge = (u: number, w: number): boolean => {
+      const key = u < w ? `${u}_${w}` : `${w}_${u}`;
+      return (edgeFaces.get(key) ?? 0) >= 2 && assign.get(key) === "F";
+    };
+    // SEAM = a real JOIN: an M/V fold hinge or a "C" cut → the tile recedes here (visible seam/gap).
+    const isSeam = (u: number, w: number): boolean => {
+      const a = assign.get(u < w ? `${u}_${w}` : `${w}_${u}`);
+      return a === "M" || a === "V" || a === "C";
+    };
+    // Pivot corners: cluster corners by rest position; a position is a pivot if ≥2 tiles meet there
+    // and NO shared (2-face) edge passes through it (the solver splits shared corners, so go by
+    // position). Those points get a same-colour ligament instead of opening.
+    const q = 1e3;
+    const keyOf = (v: number): string => `${Math.round(r[v * 3] * q)}_${Math.round(r[v * 3 + 1] * q)}_${Math.round(r[v * 3 + 2] * q)}`;
+    const posFaces = new Map<string, Set<number>>();
+    net.faces.forEach((f, fi) => f.forEach((v) => (posFaces.get(keyOf(v)) ?? posFaces.set(keyOf(v), new Set()).get(keyOf(v))!).add(fi)));
+    const onShared = new Set<string>();
+    for (const [key, c] of edgeFaces) {
+      if (c < 2) continue;
+      const u = key.indexOf("_");
+      onShared.add(keyOf(Number(key.slice(0, u)))); onShared.add(keyOf(Number(key.slice(u + 1))));
     }
-    // Fold-adaptive subdivision: faces touching harder folds split into more sub-tiles (shared with
-    // the STL export via tile-subdiv). Each triangle's sub-tiles are coplanar — purely visual res.
-    const depth = this.printedFaceDepths(net);
-    this.tileBary = depth.map((d) => subdivBary(d));
-    const totalSub = this.tileBary.reduce((n, b) => n + b.length, 0);
+    const isPivot = (v: number): boolean => { const k = keyOf(v); return !onShared.has(k) && (posFaces.get(k)?.size ?? 0) >= 2; };
+    this.tileSign = new Float32Array(nTris);
+    this.tileEdgeMerge = [];
+    this.tileEdgeSeam = [];
+    this.tilePivotCorner = [];
+    let mx = 0, my = 0, mz = 0;
+    const nrm: number[][] = [];
+    for (let f = 0; f < ff.length; f += 3) {
+      const ia = ff[f], ib = ff[f + 1], ic = ff[f + 2], a = ia * 3, b = ib * 3, c = ic * 3;
+      const nx = (r[b + 1] - r[a + 1]) * (r[c + 2] - r[a + 2]) - (r[b + 2] - r[a + 2]) * (r[c + 1] - r[a + 1]);
+      const ny = (r[b + 2] - r[a + 2]) * (r[c] - r[a]) - (r[b] - r[a]) * (r[c + 2] - r[a + 2]);
+      const nz = (r[b] - r[a]) * (r[c + 1] - r[a + 1]) - (r[b + 1] - r[a + 1]) * (r[c] - r[a]);
+      nrm.push([nx, ny, nz]); mx += nx; my += ny; mz += nz;
+      this.tileEdgeMerge.push([isMerge(ia, ib), isMerge(ib, ic), isMerge(ic, ia)]); // edges AB, BC, CA
+      this.tileEdgeSeam.push([isSeam(ia, ib), isSeam(ib, ic), isSeam(ic, ia)]);
+      this.tilePivotCorner.push([isPivot(ia), isPivot(ib), isPivot(ic)]); // corners A, B, C
+    }
+    for (let i = 0; i < nrm.length; i++) {
+      this.tileSign[i] = nrm[i][0] * mx + nrm[i][1] * my + nrm[i][2] * mz >= 0 ? 1 : -1;
+    }
 
-    this.thickPos = new Float32Array(totalSub * 21 * 3); // 7 tris (top + 3 side quads) × 3 verts each
+    this.thickPos = new Float32Array(nTris * 21 * 3); // 7 tris (top + 3 side quads) × 3 verts each
     this.thickGeo = new THREE.BufferGeometry();
     this.thickAttr = new THREE.BufferAttribute(this.thickPos, 3);
     this.thickAttr.setUsage(THREE.DynamicDrawUsage);
@@ -579,21 +610,7 @@ export class SimCanvas {
     });
     this.thickMesh = new THREE.Mesh(this.thickGeo, mat);
     this.group.add(this.thickMesh);
-    this.buildJoints(net, diag); // TPU spherical joints pinning corner-meeting tiles (rotating-units pivots)
     this.updatePrintedTiles();
-  }
-
-  /** Per-face subdivision depth from the design fold angles, matching the STL export's metric. */
-  private printedFaceDepths(net: FoldNet): number[] {
-    const c = this.fold!.model.creases;
-    const score = new Array<number>(net.faces.length).fill(0);
-    for (let i = 0; i < c.count; i++) {
-      const m = Math.abs(c.targetTheta[i]);
-      const f1 = c.face1[i], f2 = c.face2[i];
-      if (f1 >= 0 && f1 < score.length) score[f1] = Math.max(score[f1], m);
-      if (f2 >= 0 && f2 < score.length) score[f2] = Math.max(score[f2], m);
-    }
-    return foldDepths(score, this.tileDetail + DETAIL_OFFSET); // level 0 → 1 subdivision (slider shift)
   }
 
   /** Set the fold-adaptive detail cap (shared with the export) and rebuild the printed tiles. */
@@ -612,144 +629,80 @@ export class SimCanvas {
     if (this.material === "printed" && this.net) this.buildPrintedTiles(this.net);
   }
 
-  /** Refill the printed-tile vertex buffer from the current folded positions (one prism per sub-tile). */
+  /**
+   * Refill the printed-tile buffer from the live folded positions: one full brick per net triangle.
+   * Per-edge: FACET ("F") edges merge (no wall, internal to a logical tile); M/V fold-hinges and "C"
+   * cuts recede by the Gap and get a wall — a visible seam/gap at every JOIN (the PyKirigami look);
+   * boundary edges stay full + walled (clean outer sides). Shared corner pivots stay full (ligament).
+   */
   private updatePrintedTiles(): void {
-    const faces = this.tileFaces;
-    const bary = this.tileBary;
-    const out = this.thickPos;
-    if (!faces || !bary || !out || !this.fold) return;
+    const faces = this.tileFaces, mergeFlags = this.tileEdgeMerge, seamFlags = this.tileEdgeSeam, pivots = this.tilePivotCorner, out = this.thickPos;
+    if (!faces || !mergeFlags || !seamFlags || !pivots || !out || !this.fold) return;
     const p = this.fold.model.position;
-    const t = this.tileT;
-    let o = 0;
-    const push = (v: [number, number, number]): void => {
-      out[o++] = v[0]; out[o++] = v[1]; out[o++] = v[2];
+    const t = this.tileT, inset = this.tileInset, sign = this.tileSign;
+    type V = [number, number, number];
+    const sub = (a: V, b: V): V => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const cross = (a: V, b: V): V => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const dot = (a: V, b: V): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    // Intersect two coplanar lines (point,dir) in the plane with normal n; null if ~parallel
+    // (relative threshold so it's scale-independent for thin tiles).
+    const meet = (p1: V, d1: V, p2: V, d2: V, n: V): V | null => {
+      const den = dot(cross(d1, d2), n);
+      const scale = (Math.hypot(d1[0], d1[1], d1[2]) * Math.hypot(d2[0], d2[1], d2[2])) || 1;
+      if (Math.abs(den) < 1e-7 * scale) return null;
+      const tt = dot(cross(sub(p2, p1), d2), n) / den;
+      return [p1[0] + d1[0] * tt, p1[1] + d1[1] * tt, p1[2] + d1[2] * tt];
     };
+    let o = 0;
+    const push = (v: V): void => { out[o++] = v[0]; out[o++] = v[1]; out[o++] = v[2]; };
     for (let f = 0, fi = 0; f < faces.length; f += 3, fi++) {
-      const a = faces[f] * 3, b = faces[f + 1] * 3, c = faces[f + 2] * 3;
-      const ax = p[a], ay = p[a + 1], az = p[a + 2];
-      const bx = p[b], by = p[b + 1], bz = p[b + 2];
-      const cx = p[c], cy = p[c + 1], cz = p[c + 2];
-      // face normal (shared by all sub-tiles — a triangle face is planar), pinned to the one-sided face
-      let nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
-      let ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
-      let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-      const nl = Math.hypot(nx, ny, nz) || 1;
-      const sgn = this.tileSign ? this.tileSign[fi] : 1;
-      nx = (nx / nl) * sgn; ny = (ny / nl) * sgn; nz = (nz / nl) * sgn;
-      // Each sub-tile's corner = barycentric blend of the live face corners.
-      const at = (w: [number, number, number]): [number, number, number] => [
-        w[0] * ax + w[1] * bx + w[2] * cx,
-        w[0] * ay + w[1] * by + w[2] * cy,
-        w[0] * az + w[1] * bz + w[2] * cz,
-      ];
-      for (const tri of bary[fi]) {
-        const v0 = at(tri[0]), v1 = at(tri[1]), v2 = at(tri[2]);
-        const gx = (v0[0] + v1[0] + v2[0]) / 3, gy = (v0[1] + v1[1] + v2[1]) / 3, gz = (v0[2] + v1[2] + v2[2]) / 3;
-        // shrink each corner toward the sub-tile centroid (exposes the bare-cloth hinge strip), then
-        // offset along the normal → top plate at +t, wall bases at the hinge plane (s=0), one-sided.
-        const corner = (v: [number, number, number], s: number): [number, number, number] => {
-          const ix = v[0] + (gx - v[0]) * this.tileInset;
-          const iy = v[1] + (gy - v[1]) * this.tileInset;
-          const iz = v[2] + (gz - v[2]) * this.tileInset;
-          return [ix + nx * s, iy + ny * s, iz + nz * s];
-        };
-        const t0 = corner(v0, t), t1 = corner(v1, t), t2 = corner(v2, t);
-        const b0 = corner(v0, 0), b1 = corner(v1, 0), b2 = corner(v2, 0);
-        // top plate + 3 side quads. NO bottom plate: it sat coincident on the cloth plane and z-fought
-        // the fabric backing; the cloth mesh is the backing, so the open bottom is hidden behind it.
-        push(t0); push(t1); push(t2);
-        const tops = [t0, t1, t2], bots = [b0, b1, b2];
-        for (let e = 0; e < 3; e++) {
-          const j = (e + 1) % 3;
-          push(bots[e]); push(bots[j]); push(tops[j]);
-          push(bots[e]); push(tops[j]); push(tops[e]);
-        }
+      const A: V = [p[faces[f] * 3], p[faces[f] * 3 + 1], p[faces[f] * 3 + 2]];
+      const B: V = [p[faces[f + 1] * 3], p[faces[f + 1] * 3 + 1], p[faces[f + 1] * 3 + 2]];
+      const C: V = [p[faces[f + 2] * 3], p[faces[f + 2] * 3 + 1], p[faces[f + 2] * 3 + 2]];
+      const raw = cross(sub(B, A), sub(C, A));
+      const nl = Math.hypot(raw[0], raw[1], raw[2]) || 1, s = sign ? sign[fi] : 1;
+      const N: V = [(raw[0] / nl) * s, (raw[1] / nl) * s, (raw[2] / nl) * s];
+      const G: V = [(A[0] + B[0] + C[0]) / 3, (A[1] + B[1] + C[1]) / 3, (A[2] + B[2] + C[2]) / 3];
+      const merge = mergeFlags[fi]; // [AB, BC, CA] — facet edges merge (no wall, full)
+      const seam = seamFlags[fi];   // [AB, BC, CA] — M/V/C joins recede (the seam/gap); boundary stays full
+      // gap distance from this tile's inradius, scaled by the Gap slider (only at cut edges)
+      const peri = Math.hypot(...sub(B, A)) + Math.hypot(...sub(C, B)) + Math.hypot(...sub(A, C)) || 1;
+      const inr = nl / peri; // inradius = 2·area/perimeter, and nl = 2·area
+      const d = inset * inr * 2;
+      const maxMove = 2 * inr; // clamp degenerate (thin-tri) corners so they can't fly off
+      const clamp = (P: V, orig: V): V => {
+        const dl = Math.hypot(P[0] - orig[0], P[1] - orig[1], P[2] - orig[2]);
+        if (dl <= maxMove || dl < 1e-12) return P;
+        const k = maxMove / dl;
+        return [orig[0] + (P[0] - orig[0]) * k, orig[1] + (P[1] - orig[1]) * k, orig[2] + (P[2] - orig[2]) * k];
+      };
+      // inward-offset supporting line of an edge P0→P1 (offset only if it's a CUT edge)
+      const line = (P0: V, P1: V, recede: boolean): { pt: V; dir: V } => {
+        const dir = sub(P1, P0);
+        let m = cross(N, dir);
+        const ml = Math.hypot(m[0], m[1], m[2]) || 1; m = [m[0] / ml, m[1] / ml, m[2] / ml];
+        const mid: V = [(P0[0] + P1[0]) / 2, (P0[1] + P1[1]) / 2, (P0[2] + P1[2]) / 2];
+        if (dot(m, sub(G, mid)) < 0) m = [-m[0], -m[1], -m[2]]; // point inward (toward centroid)
+        const off = recede ? d : 0;
+        return { pt: [P0[0] + m[0] * off, P0[1] + m[1] * off, P0[2] + m[2] * off], dir };
+      };
+      const lAB = line(A, B, seam[0]), lBC = line(B, C, seam[1]), lCA = line(C, A, seam[2]);
+      const piv = pivots[fi]; // shared-pivot corners stay FULL → tiles join there with a ligament
+      const Ap = piv[0] ? A : clamp(meet(lCA.pt, lCA.dir, lAB.pt, lAB.dir, N) ?? A, A); // corner A: edges CA ∩ AB
+      const Bp = piv[1] ? B : clamp(meet(lAB.pt, lAB.dir, lBC.pt, lBC.dir, N) ?? B, B); // corner B: edges AB ∩ BC
+      const Cp = piv[2] ? C : clamp(meet(lBC.pt, lBC.dir, lCA.pt, lCA.dir, N) ?? C, C); // corner C: edges BC ∩ CA
+      const top = (v: V): V => [v[0] + N[0] * t, v[1] + N[1] * t, v[2] + N[2] * t];
+      const tops: V[] = [top(Ap), top(Bp), top(Cp)], bots: V[] = [Ap, Bp, Cp];
+      push(tops[0]); push(tops[1]); push(tops[2]); // top plate (open bottom — hidden by the cloth backing)
+      for (let e = 0; e < 3; e++) {
+        const j = (e + 1) % 3;
+        if (merge[e]) { push(bots[e]); push(bots[e]); push(bots[e]); push(bots[e]); push(bots[e]); push(bots[e]); continue; } // facet: same tile, no wall
+        push(bots[e]); push(bots[j]); push(tops[j]); // seam / boundary edge: this brick gets its own wall
+        push(bots[e]); push(tops[j]); push(tops[e]);
       }
     }
     this.thickAttr!.needsUpdate = true;
     this.thickGeo!.computeVertexNormals();
-    this.updateJoints();
-  }
-
-  /**
-   * Find the SPHERICAL joints: corner points where ≥2 tiles meet but NO shared (2-face) fold edge
-   * runs through them — i.e. rotating-units pivots. The solver net splits shared corners into
-   * separate vertices, so we cluster by REST position to recover each physical pivot. Tiles that
-   * share a fold edge are already joined by the continuous TPU backing, so those points are skipped;
-   * cut ("C") edges carry no joint and stay open. One small TPU sphere per pivot ties the tiles.
-   */
-  private buildJoints(net: FoldNet, diag: number): void {
-    this.disposeJoints();
-    if (!this.fold) return;
-    const rest = this.fold.model.rest;
-    const q = 1e3; // ~1µm·(unit) snap so coincident split corners cluster together
-    const keyOf = (v: number): string =>
-      `${Math.round(rest[v * 3] * q)}_${Math.round(rest[v * 3 + 1] * q)}_${Math.round(rest[v * 3 + 2] * q)}`;
-    // vertex → incident tiles
-    const vFaces = new Map<number, Set<number>>();
-    net.faces.forEach((f, fi) => f.forEach((v) => (vFaces.get(v) ?? vFaces.set(v, new Set()).get(v)!).add(fi)));
-    // positions that sit on a shared (2-face) edge are handled by the continuous backing, not a sphere
-    const edgeFaces = new Map<string, number>();
-    net.faces.forEach((f) => {
-      for (let k = 0; k < f.length; k++) {
-        const u = f[k], w = f[(k + 1) % f.length], kk = u < w ? `${u}_${w}` : `${w}_${u}`;
-        edgeFaces.set(kk, (edgeFaces.get(kk) ?? 0) + 1);
-      }
-    });
-    const onSharedEdge = new Set<string>();
-    for (const [kk, n] of edgeFaces) {
-      if (n < 2) continue;
-      const u = kk.indexOf("_");
-      onSharedEdge.add(keyOf(Number(kk.slice(0, u))));
-      onSharedEdge.add(keyOf(Number(kk.slice(u + 1))));
-    }
-    // cluster vertices by rest position; a pivot = a cluster touched by ≥2 tiles, off any shared edge
-    const clusters = new Map<string, number[]>();
-    for (let v = 0; v < net.vertices.length; v++) {
-      const k = keyOf(v);
-      (clusters.get(k) ?? clusters.set(k, []).get(k)!).push(v);
-    }
-    const pivots: number[][] = [];
-    for (const [k, verts] of clusters) {
-      if (onSharedEdge.has(k)) continue;
-      const tiles = new Set<number>();
-      for (const v of verts) for (const fi of vFaces.get(v) ?? []) tiles.add(fi);
-      if (tiles.size >= 2) pivots.push(verts);
-    }
-    this.sphPivots = pivots;
-    if (!pivots.length) return;
-    const r = Math.max(diag * 0.01, 1e-4);
-    this.jointGeo = new THREE.SphereGeometry(r, 12, 8);
-    this.jointMat = new THREE.MeshStandardMaterial({ color: COLOR_HINGE, metalness: 0.0, roughness: 0.85 });
-    this.jointMesh = new THREE.InstancedMesh(this.jointGeo, this.jointMat, pivots.length);
-    this.jointMesh.visible = !this.circuitMode; // joints hide while the circuit editor is open
-    this.group.add(this.jointMesh);
-    this.updateJoints();
-  }
-
-  /** Move each spherical joint to the live centroid of its (split) pivot vertices. */
-  private updateJoints(): void {
-    if (!this.jointMesh || !this.sphPivots || !this.fold) return;
-    const p = this.fold.model.position;
-    const m = new THREE.Matrix4();
-    this.sphPivots.forEach((verts, i) => {
-      let x = 0, y = 0, z = 0;
-      for (const v of verts) { x += p[v * 3]; y += p[v * 3 + 1]; z += p[v * 3 + 2]; }
-      const n = verts.length;
-      m.makeTranslation(x / n, y / n, z / n);
-      this.jointMesh!.setMatrixAt(i, m);
-    });
-    this.jointMesh.instanceMatrix.needsUpdate = true;
-  }
-
-  private disposeJoints(): void {
-    if (this.jointMesh) this.group.remove(this.jointMesh);
-    this.jointGeo?.dispose();
-    this.jointMat?.dispose();
-    this.jointMesh = null;
-    this.jointGeo = null;
-    this.jointMat = null;
-    this.sphPivots = null;
   }
 
   // --- Circuit overlay ------------------------------------------------------
@@ -757,7 +710,6 @@ export class SimCanvas {
   /** Enter/exit the circuit editor (flat 2D + tool interactions + snap grid). */
   setCircuitMode(on: boolean): void {
     this.circuitMode = on;
-    if (this.jointMesh) this.jointMesh.visible = !on; // bare TPU while routing traces; joints return after
     if (this.gridLines) this.gridLines.visible = on;
     if (!on) { this.routeStart = null; this.routeGroup.clear(); this.held = null; this.ghostGroup.clear(); this.select(null); }
     this.setCircuitTool("select"); // start on the select cursor; clears any held part + sets the cursor
@@ -1202,9 +1154,10 @@ export class SimCanvas {
     this.thickPos = null;
     this.thickAttr = null;
     this.thickMesh = null;
-    this.disposeJoints();
     this.tileFaces = null;
-    this.tileBary = null;
+    this.tileEdgeMerge = null;
+    this.tileEdgeSeam = null;
+    this.tilePivotCorner = null;
     this.circuitGroup.clear();
     this.routeGroup.clear();
     this.ghostGroup.clear();

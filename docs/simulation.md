@@ -12,6 +12,9 @@ FOLD/FKLD ──▶ fold-ops.ts ──▶ origami-import.ts ──▶ FoldSolver
             (preprocess)      (assemble + infer)    (step)        (render)
 ```
 
+For the file-level import contract, fold-angle priority, and material-mode
+details, see `subsystems/origami-import.md`.
+
 ### 1. Preprocess — `src/sim/fold-ops.ts`
 
 A faithful port of `js/pattern.js` from the original simulator:

@@ -20,6 +20,7 @@ Model loading turns files, samples, and raw text into `LoadedModel` values.
 | `.json` | `fold` | JSON parsed as `FoldFile`. |
 | `.obj` | `mesh` | Raw text stored for pipeline conversion. |
 | `.stl` | `mesh` | Raw text stored for pipeline conversion; ASCII expected downstream. |
+| `.svg` | unsupported by app loader | SVG crease-pattern import currently exists as a headless/sim utility, not as a convert-panel input. See `svg-import.md`. |
 
 Unsupported extensions produce `AppError("io", ...)`.
 
@@ -64,4 +65,3 @@ Network/fetch failures become `AppError("io", ...)`.
 | Unsupported extension | `io` | Keep model, bad status. |
 | FileReader error | `io` | Keep model, bad status. |
 | Sample fetch error | `io` | Keep model, neutral status in `loadSample`. |
-

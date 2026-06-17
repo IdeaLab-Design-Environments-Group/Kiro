@@ -3,13 +3,17 @@
 SVG export produces cutter-friendly SVGs from the currently displayed FOLD/FKLD
 flat pattern.
 
+For the separate 3D-printable tile mesh export, see `stl-export.md`. For the
+reverse path that imports Origami Simulator-style SVG crease patterns into
+FOLD/FKLD, see `svg-import.md`.
+
 ## Files
 
 | File | Role |
 | --- | --- |
 | `src/model/fkld-svg-export.ts` | Pure FKLD/FOLD to SVG/ZIP payload builder. |
 | `src/services/svg-export-service.ts` | Resolves the target pattern. |
-| `src/view/export-modal.ts` | Export modal UI, previews, downloads. |
+| `src/view/export-modal.ts` | Shared export modal UI, SVG previews, and SVG/STL downloads. |
 | `src/controller/app-controller.ts` | Wires provider and enabled state. |
 | `@kirigami/model/zip.js` | Dependency-free ZIP writer reused for bundled SVGs. |
 
@@ -90,4 +94,3 @@ If boundary cuts look open:
 1. Check boundary edges are 2-regular for loop assembly.
 2. If not, export falls back to stroked cut paths.
 3. Validate `edges_assignment` and `edges_vertices`.
-

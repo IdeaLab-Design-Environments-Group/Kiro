@@ -15,6 +15,8 @@ The conductor layer is exported separately from the tile STL. This lets a user
 print or fabricate the mechanical kirigami first, then print/deposit conductive
 ribs and SMD footprints in the same flat coordinate system.
 
+For the tile mesh export itself, see `stl-export.md`.
+
 ## Files
 
 | File | Role |

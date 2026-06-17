@@ -31,9 +31,15 @@ single working area: files, data flow, extension points, and failure modes.
 | Circuit editor/export | `circuit-editor.md` | SMD parts, trace routing, app-state circuit save, and separate circuit STL export. |
 | FKLD validation | `fkld-validation.md` | Extension keys, validators, emission checks. |
 | SVG export | `svg-export.md` | Cut/score layer export, ZIP payloads, export modal. |
+| Export modal routing | `export-modal.md` | Shared SVG/STL/circuit download surface and provider lifecycle. |
+| STL export | `stl-export.md` | Printed tile STL export, adaptive subdivision, sim/export parity. |
+| Pattern editor | `pattern-editor.md` | Paintable crease lattice, presets, and FKLD emission route. |
+| SVG import | `svg-import.md` | Origami Simulator SVG to FOLD/FKLD importer and RES Tower generator. |
+| Origami/FOLD sim import | `origami-import.md` | FOLD/FKLD preprocessing, fold-angle policy, and solver model assembly. |
 | Scene routing | `scene-routing.md` | Viewer-first source selection for sim/export. |
 | Modal lifecycle | `modal-lifecycle.md` | Sim/export modal providers, open/close, downloads. |
 | Static assets/examples | `static-assets-and-examples.md` | `public/`, samples, viewer asset source of truth. |
+| Example generators | `example-generators.md` | Reproducible scripts that create bundled public examples. |
 | Build/config | `build-and-config.md` | Vite, Vitest, CoffeeScript transform, aliases, command expectations. |
 | Styling | `styling.md` | Global CSS contract, view class names, modal/export style ownership. |
 | Test suite | `test-suite.md` | Test folders, patterns, architecture checks. |
