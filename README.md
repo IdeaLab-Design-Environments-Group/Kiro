@@ -90,8 +90,9 @@ npm run preview   # serve the production build
 | `src/model/fold-file.ts` | minimal FOLD/FKLD typings |
 | `src/model/derive-facts.ts` | loaded model → Derived rows presenter |
 | `src/model/fkld-metadata.ts` | FKLD/FOLD → metadata sections presenter |
+| `src/model/pattern-grid.ts` | pattern editor model: paintable lattice → triangulated FOLD draft (`gridToFold`) + presets |
 | `src/model/geometry.ts` · `src/model/types.ts` | kirigami geometry/domain calculations |
-| `src/view/` | DOM/WebGL views: convert panel, metadata panel, viewer frame, header actions, sim modal/canvas |
+| `src/view/` | DOM/WebGL views: convert panel, metadata panel, viewer frame, header actions, sim modal/canvas, pattern-editor modal |
 | `src/styles.css` | AKDE-derived theme (incl. 3D-sim modal) |
 | `src/pipeline/` | pure mesh-to-kirigami conversion stages and DTO contracts |
 | `src/sim/` | simulation domain: bar-and-hinge fold engine + `fold-adapter`/`scene` builders |

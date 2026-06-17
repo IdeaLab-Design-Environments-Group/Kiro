@@ -27,6 +27,7 @@ src/
     fkld-metadata.ts
     fkld-svg-export.ts
     fold-file.ts
+    pattern-grid.ts
   pipeline/
     conditioning.ts
     curvature.ts
@@ -62,6 +63,7 @@ src/
     export-modal.ts
     header-actions.ts
     metadata-panel.ts
+    pattern-editor-modal.ts
     sim-canvas.ts
     sim-modal.ts
     viewer-frame.ts
@@ -111,7 +113,7 @@ New features land here, not in the controller.
 | File | Responsibility |
 | --- | --- |
 | `model-loader.ts` | Text→`LoadedModel` parsing, FileReader IO (callback-style by design), sample fetching, loaded-status strings. |
-| `pattern-service.ts` | Single facade over BOTH creation paths — the M1–M5 pipeline (`kirigamizeMesh`) and the AKDE creation pipeline (`createAkdePyramid`) — returning a narrow `PatternOutcome`. |
+| `pattern-service.ts` | Single facade over the creation paths — the M1–M5 pipeline (`kirigamizeMesh`), the AKDE creation pipeline (`createAkdePyramid`), and the **pattern editor** (`fkldFromPatternGrid` / `serializePatternGrid`) — each returning a narrow `PatternOutcome`. Owns the `fkld:` namespace stamping for the editor draft. |
 | `sim-scene-service.ts` | `resolveSimScene(model, shown)` — pure policy for what the 3D Sim folds. |
 | `svg-export-service.ts` | `resolveSvgExport(model, shown)` — pure policy for what SVG export targets. |
 
@@ -131,6 +133,7 @@ Rules:
 | `derive-facts.ts` | Loaded model to Derived panel rows. |
 | `fkld-metadata.ts` | FOLD/FKLD object to metadata panel sections. |
 | `fkld-svg-export.ts` | FOLD/FKLD flat pattern to cut/score SVG payload. |
+| `pattern-grid.ts` | Secondary design path: a paintable square lattice (Origami-Simulator crease vocabulary) compiled to a triangulated FOLD draft (`gridToFold`) + foldable presets. Pure; the service stamps the `fkld:` keys. |
 
 Kirigami geometry/types (`KirigamiState`, `computeState`, …) live in
 `@kirigami/model` — the single source of truth. The former `src/model/types.ts`
@@ -155,6 +158,7 @@ Rules:
 | `metadata-panel.ts` | FKLD metadata rendering. |
 | `viewer-frame.ts` | Embedded FKLD viewer iframe and postMessage bridge. |
 | `export-modal.ts` | SVG export modal with previews and downloads. |
+| `pattern-editor-modal.ts` | Interactive crease-pattern grid editor (secondary design path): tool palette, presets, paints a `PatternGrid`, emits `onUse(grid)` + a download serializer. |
 | `header-actions.ts` | Header buttons and intent callbacks. |
 | `sim-modal.ts` | 3D simulation modal shell and fold slider. |
 | `sim-canvas.ts` | Three.js/WebGL simulation rendering and animation policy. |

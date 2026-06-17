@@ -13,7 +13,14 @@ import { summarizeFkldForDisplay } from "../model/fkld-metadata.js";
 import { canSimulate } from "../sim/index.js";
 import { statusFromError } from "../core/errors.js";
 import { loadedStatus, readModelFile, fetchSample } from "../services/model-loader.js";
-import { kirigamizeMesh, createAkdePyramid, bstSurfaceProgram } from "../services/pattern-service.js";
+import {
+  kirigamizeMesh,
+  createAkdePyramid,
+  create25dSign,
+  bstSurfaceProgram,
+  fkldFromPatternGrid,
+  serializePatternGrid,
+} from "../services/pattern-service.js";
 import { resolveSimScene } from "../services/sim-scene-service.js";
 import { resolveSvgExport } from "../services/svg-export-service.js";
 import { resolveStlExport } from "../services/stl-export-service.js";
@@ -23,6 +30,8 @@ import type { ViewerFrame } from "../view/viewer-frame.js";
 import type { HeaderActions, KirigamizeMethod } from "../view/header-actions.js";
 import type { SimModal } from "../view/sim-modal.js";
 import type { ExportModal } from "../view/export-modal.js";
+import type { PatternEditorModal } from "../view/pattern-editor-modal.js";
+import type { PatternGrid } from "../model/pattern-grid.js";
 
 const SAMPLE_URL = "./examples/akde-hex.fkld";
 const SAMPLE_NAME = "akde-hex.fkld";
@@ -36,6 +45,7 @@ export class AppController {
     private readonly header: HeaderActions,
     private readonly sim: SimModal,
     private readonly exporter: ExportModal,
+    private readonly patternEditor: PatternEditorModal,
   ) {
     // 3D Sim folds exactly what the VIEWER is showing (fall back to the loaded model). This keeps
     // "what you see is what gets simulated" true even when the viewer and the convert panel differ.
@@ -91,8 +101,14 @@ export class AppController {
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
     this.header.onCreatePyramid(() => this.createPyramid());
+    this.header.onCreate25d(() => this.create25d());
     this.header.onLoadSample(() => void this.loadSample());
     this.header.onKirigamize((method) => this.kirigamize(method));
+
+    // Secondary design path: the pattern editor commits a drawn grid as FKLD,
+    // then shows it like any other pattern. The serializer feeds its download.
+    this.patternEditor.onUse((grid) => this.usePattern(grid));
+    this.patternEditor.setSerializer((grid) => serializePatternGrid(grid));
 
     // Model changes → re-render every view (fires once immediately with state).
     this.store.subscribe((state) => this.render(state));
@@ -160,12 +176,46 @@ export class AppController {
     }
   }
 
+  /** Commit a hand-drawn crease pattern (the editor's lattice) as an FKLD pattern and show it. */
+  usePattern(grid: PatternGrid): void {
+    try {
+      const outcome = fkldFromPatternGrid(grid);
+      this.showPattern(outcome.fkld, outcome.name);
+      this.store.setStatus(outcome.summary, outcome.ok ? "ok" : "bad");
+      this.patternEditor.close();
+    } catch (err) {
+      const { msg, kind } = statusFromError(err, "create", "pattern editor failed");
+      this.store.setStatus(msg, kind);
+    }
+  }
+
   /** Generate an AKDE pyramid via the transferred creation pipeline (see pattern-service). */
   createPyramid(): void {
     try {
       const outcome = createAkdePyramid();
       this.showPattern(outcome.fkld, outcome.name);
       this.store.setStatus(outcome.summary, "ok");
+    } catch (err) {
+      const { msg, kind } = statusFromError(err, "create");
+      this.store.setStatus(msg, kind);
+    }
+  }
+
+  /**
+   * Generate a 2.5D cut-and-fold sign (Demaine et al. 2023, Theorem 1). Prompts
+   * for sign text; blank/cancel falls back to the Space Invader (paper Fig. 1).
+   * The result is a flat crease-cut pattern (parallel cuts + 90° M/V creases)
+   * that the 3D Sim pops up into a relief.
+   */
+  create25d(): void {
+    const text = typeof window !== "undefined" && typeof window.prompt === "function"
+      ? window.prompt("2.5D cut-and-fold sign — type text (A–Z, 0–9), or leave blank for a Space Invader:", "")
+      : "";
+    if (text === null) return; // cancelled
+    try {
+      const outcome = create25dSign({ text });
+      this.showPattern(outcome.fkld, outcome.name);
+      this.store.setStatus(outcome.summary, outcome.ok ? "ok" : "bad");
     } catch (err) {
       const { msg, kind } = statusFromError(err, "create");
       this.store.setStatus(msg, kind);

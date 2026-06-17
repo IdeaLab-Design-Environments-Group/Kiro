@@ -26,6 +26,10 @@ export { FoldSolver, measureTheta } from "./solver.js";
 export { buildFoldScene, setupGuidedFold, singleHingeModel } from "./build.js";
 export type { FoldScene, SimMaterial } from "./build.js";
 
+// Origami Simulator SVG importer (1:1 port of pattern.js loadSVG) — any OS crease-pattern SVG → FOLD.
+export { importOrigamiSimulatorSvg, DEFAULT_VERT_TOL } from "./svg-import.js";
+export type { SvgImportOptions, SvgImportStats } from "./svg-import.js";
+
 // FOLD/FKLD adapters + scene resolution (Node-safe: no Three.js anywhere below).
 export { buildSceneFromFold, isFoldable, ORIGAMI_PARAMS, PRINTED_PARAMS, DEFAULT_PRINTED, printedThetaMax } from "./fold-adapter.js";
 export type { PrintedParams } from "./fold-adapter.js";

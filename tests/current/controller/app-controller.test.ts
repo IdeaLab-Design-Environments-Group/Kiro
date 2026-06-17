@@ -3,6 +3,7 @@ import { AppController } from "../../../src/controller/app-controller.js";
 import { AppStore } from "../../../src/model/app-store.js";
 import { canSimulate } from "../../../src/sim/scene.js";
 import type { FoldFile, LoadedModel } from "../../../src/model/fold-file.js";
+import { PatternGrid, presetWaterbomb } from "../../../src/model/pattern-grid.js";
 
 class ConvertPanelMock {
   factsCalls: [string, string][][] = [];
@@ -142,6 +143,24 @@ class ExportModalMock {
   }
 }
 
+class PatternEditorModalMock {
+  useHandler: ((grid: unknown) => void) | null = null;
+  serializer: ((grid: unknown) => unknown) | null = null;
+  closeCalls = 0;
+
+  onUse(handler: (grid: unknown) => void): void {
+    this.useHandler = handler;
+  }
+
+  setSerializer(serializer: (grid: unknown) => unknown): void {
+    this.serializer = serializer;
+  }
+
+  close(): void {
+    this.closeCalls++;
+  }
+}
+
 function makeFold(overrides: Partial<FoldFile> = {}): FoldFile {
   return {
     vertices_coords: [
@@ -167,6 +186,7 @@ function setup() {
   const header = new HeaderActionsMock();
   const sim = new SimModalMock();
   const exporter = new ExportModalMock();
+  const patternEditor = new PatternEditorModalMock();
   const controller = new AppController(
     store,
     convert as never,
@@ -175,8 +195,9 @@ function setup() {
     header as never,
     sim as never,
     exporter as never,
+    patternEditor as never,
   );
-  return { controller, store, convert, metadata, viewer, header, sim, exporter };
+  return { controller, store, convert, metadata, viewer, header, sim, exporter, patternEditor };
 }
 
 describe("controller/app-controller", () => {
@@ -290,6 +311,27 @@ describe("controller/app-controller", () => {
       kind: "ok",
     });
     expect(sim.enabledCalls.at(-1)).toBe(true);
+  });
+
+  it("commits a drawn crease pattern (editor → FKLD) to the viewer and closes the modal", () => {
+    const { patternEditor, viewer, convert, sim } = setup();
+
+    const grid = new PatternGrid(4, 4, 10);
+    presetWaterbomb(grid); // a foldable, simulable pattern
+    patternEditor.useHandler?.(grid);
+
+    expect(viewer.showCalls).toHaveLength(1);
+    expect(viewer.showCalls[0]?.name).toBe("pattern-4x4.fkld");
+    expect(viewer.showCalls[0]?.object.faces_vertices?.length).toBeGreaterThan(0);
+    expect(canSimulate(viewer.showCalls[0]!.object)).toBe(true);
+    expect(convert.statusCalls.at(-1)?.kind).toBe("ok");
+    expect(patternEditor.closeCalls).toBe(1);
+    expect(sim.enabledCalls.at(-1)).toBe(true);
+
+    // The download serializer is wired and produces valid FKLD JSON text.
+    const payload = patternEditor.serializer?.(grid) as { filename: string; text: string };
+    expect(payload.filename).toBe("pattern-4x4.fkld");
+    expect(() => JSON.parse(payload.text)).not.toThrow();
   });
 
   it("reports sample-fetch failure without throwing", async () => {
