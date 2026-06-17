@@ -11,7 +11,11 @@ build.
 | `public/examples/*.fkld` | Bundled FKLD examples. |
 | `public/examples/*.fold` | Bundled FOLD examples, if present. |
 | `public/examples/*.stl` | Bundled mesh examples, if present. |
+| `public/examples/*.obj` | Bundled OBJ mesh examples, if present. |
 | `scripts/gen-sample-stl.mjs` | Helper for generated STL samples, if used. |
+| `scripts/gen-lamp-dome.mjs` | Generates `public/examples/lamp-dome.stl`. |
+| `scripts/gen-res-tower.ts` | Converts Miyamoto RES Tower SVG to `res-square-tower.fkld` via the SVG importer. |
+| `scripts/gen-bistable-star-tiling.mjs` | Generates the bundled bistable star tiling FKLD example. |
 | `dist/` | Generated production copy. |
 
 ## Source of Truth
@@ -63,6 +67,15 @@ For STL examples:
 - Coarse enough for current pipeline tests.
 - If generated, document the generator script and parameters.
 
+For generated FKLD examples:
+
+- Keep the generator script in `scripts/`.
+- Record source/provenance metadata in `file_creator`, `file_description`, or
+  `fkld:source`.
+- Include `foldedForm` and driven flags when the example needs guided
+  deployment.
+- Rebuild `dist/` only through `npm run build`.
+
 ## Common Failure Modes
 
 | Failure | Cause | Fix |
@@ -71,4 +84,3 @@ For STL examples:
 | Viewer loads but metadata empty | File lacks FKLD/FOLD arrays. | Validate source example. |
 | Mesh conversion fails at import | Binary STL or malformed OBJ. | Re-export as ASCII STL/OBJ. |
 | `dist` differs unexpectedly | Build regenerated hashed assets. | Treat `dist` as generated output. |
-

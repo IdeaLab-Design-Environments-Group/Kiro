@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
-import { type BaryTri, DEFAULT_MAX_SUBDIV, DETAIL_OFFSET, foldDepths, subdivBary, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
+import { type BaryTri, DEFAULT_MAX_SUBDIV, DETAIL_OFFSET, foldDepths, MAX_TILE_GAP, MIN_TILE_GAP, subdivBary, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import { type Circuit, type ComponentKind, EMPTY_CIRCUIT } from "../model/circuit.js";
 import { type ComponentGeom, locateFlat, resolveCircuit, type TraceGeom, TRACE_W } from "../model/circuit-geometry.js";
 
@@ -122,16 +122,18 @@ export class SimCanvas {
   private tileFaces: number[] | null = null;
   private tileBary: BaryTri[][] | null = null; // per face: its sub-tiles (fold-adaptive) in barycentric coords
   private tileDetail = DEFAULT_MAX_SUBDIV; // max adaptive subdivision; shared with the STL export
+  private tileInset = TILE_INSET_FRAC; // gap: tile shrink toward centroid (the "Gap" slider); shared with export
   private tileT = 0; // one-sided extrude thickness (model units)
   private tileSign: Float32Array | null = null; // per-face ±1: extrude side, made consistent across mixed winding
-  // Legal hinge bridges: little printed straps tying adjacent tiles across each interior (2-face)
-  // edge — i.e. the M/V/F hinges. Cuts are split into 1-face boundary edges, so they get NO bridge
-  // and stay open (bridging a cut would lock the kirigami mechanism).
-  private bridgeList: [number, number, number, number][] | null = null; // [face1, face2, edgeV0, edgeV1]
-  private bridgePos: Float32Array | null = null;
-  private bridgeGeo: THREE.BufferGeometry | null = null;
-  private bridgeAttr: THREE.BufferAttribute | null = null;
-  private bridgeMesh: THREE.Mesh | null = null;
+  // PyKirigami-style SPHERICAL joints (printed mode): little TPU connectors pinning tiles that meet
+  // only at a corner POINT — rotating-units pivots (e.g. the rotating-triangles kirigami). Tiles that
+  // share a fold EDGE are already tied by the continuous TPU backing; cuts stay OPEN. This is what
+  // holds a printed cut-pattern together as proper kirigami (cf. PyKirigami Fig. 2c). Detected by
+  // geometric coincidence in the rest pose (the solver net splits shared corners), rebuilt each frame.
+  private sphPivots: number[][] | null = null; // each pivot: the net-vertices coincident at one point
+  private jointMesh: THREE.InstancedMesh | null = null;
+  private jointGeo: THREE.BufferGeometry | null = null;
+  private jointMat: THREE.MeshStandardMaterial | null = null;
   // Circuit overlay: SMD parts + traces placed on the tiles, riding the fold (see model/circuit*).
   private readonly circuitGroup = new THREE.Group();
   private circuit: Circuit = EMPTY_CIRCUIT;
@@ -152,7 +154,6 @@ export class SimCanvas {
   private pickPos: Float32Array | null = null;
   private downPt: { x: number; y: number } | null = null;
   private circuitListener: ((c: Circuit) => void) | null = null;
-  private crossedEdges = new Set<string>(); // mesh edges any trace runs across → their hinge bridge is dropped
   // KiCad-style routing: click a pad to start, rubber-band to the cursor, click a pad to finish.
   private readonly routeGroup = new THREE.Group();
   private routeStart: { comp: string; pad: number; world: [number, number, number] } | null = null;
@@ -224,7 +225,6 @@ export class SimCanvas {
     const { net, model } = scene;
     this.net = net;
     this.thickMesh = null; // disposeGeo()/group.clear() dropped the old tile mesh
-    this.bridgeMesh = null;
     this.material = scene.material ?? "vinyl";
 
     this.guided = anyDriven(model.driven);
@@ -331,15 +331,38 @@ export class SimCanvas {
     // fixed and skipped, so prescribed shapes are unaffected; free folds get layer-vs-layer contact.
     this.cpu.enableCollision();
 
-    // Frame the model AND tighten the depth range to its scale — a near/far ratio of ~250:1 instead
-    // of 40000:1 gives the depth buffer the precision to stop coincident folded faces z-fighting.
-    const reach = Math.max(net.meta.s, net.meta.H, 1) * 2.4;
+    // Frame the camera to the model's ACTUAL bounding box — the union of the flat rest and the
+    // folded goal, so nothing crops as the fold slider scrubs — rather than a fixed radius. The
+    // importer normalizes every model to a bounding-SPHERE of radius 1, so a high-aspect relief (a
+    // tall, narrow 2.5D sign especially) occupies only a thin slice of a fixed sphere and renders as
+    // a sliver. Fitting to the box makes any aspect fill the view. Tightening near/far to the box
+    // also keeps the ~250:1 depth ratio that stops coincident folded faces z-fighting.
+    const mdl = scene.model;
+    const anyDrivenNode = ((): boolean => { for (let i = 0; i < mdl.driven.length; i++) if (mdl.driven[i]) return true; return false; })();
+    let loX = Infinity, loY = Infinity, loZ = Infinity, hiX = -Infinity, hiY = -Infinity, hiZ = -Infinity;
+    const swallow = (a: Float32Array): void => {
+      for (let i = 0; i < mdl.numNodes; i++) {
+        const x = a[3 * i], y = a[3 * i + 1], z = a[3 * i + 2];
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+        if (x < loX) loX = x; if (x > hiX) hiX = x;
+        if (y < loY) loY = y; if (y > hiY) hiY = y;
+        if (z < loZ) loZ = z; if (z > hiZ) hiZ = z;
+      }
+    };
+    swallow(mdl.position);
+    if (anyDrivenNode) swallow(mdl.goal); // guided: also bound the folded relief it eases into
+    const cx = (loX + hiX) / 2, cy = (loY + hiY) / 2, cz = (loZ + hiZ) / 2;
+    // Fit the LARGEST box dimension to the frame. (Old code framed the radius-1 bounding sphere —
+    // span≈2 — at reach 2.4, i.e. reach ≈ span·1.2; reuse that density so the proven framing is
+    // unchanged for square models while narrow signs now fill the view too.)
+    const span = Math.max(hiX - loX, hiY - loY, hiZ - loZ, 1e-3);
+    const reach = span * 1.2;
     this.settleEps = reach * SETTLE_REL;
-    this.camera.near = Math.max(0.05, reach * 0.04);
-    this.camera.far = reach * 10;
-    this.camera.position.set(reach, -reach, reach * 0.85);
+    this.camera.near = Math.max(0.02, reach * 0.04);
+    this.camera.far = reach * 12;
+    this.camera.position.set(cx + reach, cy - reach, cz + reach * 0.85);
     this.camera.updateProjectionMatrix();
-    this.controls.target.set(0, 0, net.meta.H * 0.2);
+    this.controls.target.set(cx, cy, cz);
     this.controls.update();
   }
 
@@ -504,18 +527,12 @@ export class SimCanvas {
     // the cloth surface mesh stays at the plane as the backing. (Was centered ±thick/2.)
     this.tileT = diag * TILE_THICK_FRAC;
 
-    // A detail change rebuilds just this layer — drop the previous tile + bridge meshes first.
+    // A detail change rebuilds just this layer — drop the previous tile mesh first.
     if (this.thickMesh) {
       this.group.remove(this.thickMesh);
       this.thickGeo?.dispose();
       (this.thickMesh.material as THREE.Material).dispose();
       this.thickMesh = null;
-    }
-    if (this.bridgeMesh) {
-      this.group.remove(this.bridgeMesh);
-      this.bridgeGeo?.dispose();
-      (this.bridgeMesh.material as THREE.Material).dispose();
-      this.bridgeMesh = null;
     }
 
     this.tileFaces = net.faces.flat();
@@ -562,106 +579,8 @@ export class SimCanvas {
     });
     this.thickMesh = new THREE.Mesh(this.thickGeo, mat);
     this.group.add(this.thickMesh);
-    this.buildBridges(net);
+    this.buildJoints(net, diag); // TPU spherical joints pinning corner-meeting tiles (rotating-units pivots)
     this.updatePrintedTiles();
-  }
-
-  /**
-   * Set up the legal-bridge layer: a little strap across each interior hinge edge. A bridge is
-   * placed only on an edge that is BOTH shared by two faces AND assigned M/V/F (a real fold or
-   * facet hinge). Cut ("C") and boundary ("B") edges get NO bridge — bridging a cut would lock the
-   * kirigami mechanism. (Topology alone is insufficient: a cut can still read as a 2-face edge here,
-   * so we gate on the assignment too.)
-   */
-  private buildBridges(net: FoldNet): void {
-    if (this.bridgeMesh) { // idempotent: a circuit change rebuilds this layer to drop crossed bridges
-      this.group.remove(this.bridgeMesh);
-      this.bridgeGeo?.dispose();
-      (this.bridgeMesh.material as THREE.Material).dispose();
-      this.bridgeMesh = null;
-    }
-    const assign = new Map<string, string>();
-    for (const e of net.edges) {
-      const k = e.a < e.b ? `${e.a}_${e.b}` : `${e.b}_${e.a}`;
-      assign.set(k, e.assignment);
-    }
-    const edgeFaces = new Map<string, number[]>();
-    for (let fi = 0; fi < net.faces.length; fi++) {
-      const f = net.faces[fi];
-      const pairs: [number, number][] = [[f[0], f[1]], [f[1], f[2]], [f[2], f[0]]];
-      for (const [u, v] of pairs) {
-        const key = u < v ? `${u}_${v}` : `${v}_${u}`;
-        const list = edgeFaces.get(key);
-        if (list) list.push(fi);
-        else edgeFaces.set(key, [fi]);
-      }
-    }
-    const bridges: [number, number, number, number][] = [];
-    for (const [key, fs] of edgeFaces) {
-      if (fs.length !== 2) continue; // boundary / split cut → keep open, no bridge
-      const a = assign.get(key);
-      if (a !== "M" && a !== "V" && a !== "F") continue; // only legal hinges (never C / B)
-      if (this.crossedEdges.has(key)) continue; // a trace runs across this hinge on bare cloth → no strap
-      const u = key.indexOf("_");
-      bridges.push([fs[0], fs[1], Number(key.slice(0, u)), Number(key.slice(u + 1))]);
-    }
-    this.bridgeList = bridges;
-    this.bridgePos = new Float32Array(bridges.length * 18); // 2 tris × 3 verts × 3
-    this.bridgeGeo = new THREE.BufferGeometry();
-    this.bridgeAttr = new THREE.BufferAttribute(this.bridgePos, 3);
-    this.bridgeAttr.setUsage(THREE.DynamicDrawUsage);
-    this.bridgeGeo.setAttribute("position", this.bridgeAttr);
-    const mat = new THREE.MeshStandardMaterial({
-      color: COLOR_TILE, side: THREE.DoubleSide, flatShading: true, metalness: 0.0, roughness: 0.6,
-    });
-    this.bridgeMesh = new THREE.Mesh(this.bridgeGeo, mat);
-    this.bridgeMesh.visible = !this.circuitMode; // bridges are hidden while the circuit editor is open
-    this.group.add(this.bridgeMesh);
-  }
-
-  /** Refill the bridge straps from the live folded positions (rebuilt each frame like the tiles). */
-  private updateBridges(): void {
-    const list = this.bridgeList, out = this.bridgePos, faces = this.tileFaces;
-    if (!list || !out || !faces || !this.fold || !this.tileSign) return;
-    const p = this.fold.model.position;
-    const t = this.tileT;
-    const W = 0.16; // half-width of each strap along its edge (fraction of edge length)
-    const frame = (fi: number): { gx: number; gy: number; gz: number; nx: number; ny: number; nz: number } => {
-      const f = fi * 3;
-      const a = faces[f] * 3, b = faces[f + 1] * 3, c = faces[f + 2] * 3;
-      const ax = p[a], ay = p[a + 1], az = p[a + 2];
-      const bx = p[b], by = p[b + 1], bz = p[b + 2];
-      const cx = p[c], cy = p[c + 1], cz = p[c + 2];
-      const gx = (ax + bx + cx) / 3, gy = (ay + by + cy) / 3, gz = (az + bz + cz) / 3;
-      let nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
-      let ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
-      let nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-      const nl = Math.hypot(nx, ny, nz) || 1;
-      const s = this.tileSign![fi];
-      return { gx, gy, gz, nx: (nx / nl) * s, ny: (ny / nl) * s, nz: (nz / nl) * s };
-    };
-    // Inset toward the face centroid like a tile, then lift to the tile top (+t): the strap meets
-    // the two tiles at their top surfaces, spanning the bare-hinge gap between them.
-    const insetTop = (x: number, y: number, z: number, fr: ReturnType<typeof frame>): [number, number, number] => {
-      const ix = x + (fr.gx - x) * TILE_INSET_FRAC, iy = y + (fr.gy - y) * TILE_INSET_FRAC, iz = z + (fr.gz - z) * TILE_INSET_FRAC;
-      return [ix + fr.nx * t, iy + fr.ny * t, iz + fr.nz * t];
-    };
-    let o = 0;
-    const push = (v: [number, number, number]): void => { out[o++] = v[0]; out[o++] = v[1]; out[o++] = v[2]; };
-    for (const [f1, f2, v0, v1] of list) {
-      const a0 = v0 * 3, b0 = v1 * 3;
-      const ax = p[a0], ay = p[a0 + 1], az = p[a0 + 2];
-      const dx = p[b0] - ax, dy = p[b0 + 1] - ay, dz = p[b0 + 2] - az;
-      const at = (s: number): [number, number, number] => [ax + dx * s, ay + dy * s, az + dz * s];
-      const lo = at(0.5 - W), hi = at(0.5 + W);
-      const fr1 = frame(f1), fr2 = frame(f2);
-      const c1 = insetTop(lo[0], lo[1], lo[2], fr1), c2 = insetTop(hi[0], hi[1], hi[2], fr1);
-      const c3 = insetTop(hi[0], hi[1], hi[2], fr2), c4 = insetTop(lo[0], lo[1], lo[2], fr2);
-      push(c1); push(c2); push(c3);
-      push(c1); push(c3); push(c4);
-    }
-    this.bridgeAttr!.needsUpdate = true;
-    this.bridgeGeo!.computeVertexNormals();
   }
 
   /** Per-face subdivision depth from the design fold angles, matching the STL export's metric. */
@@ -682,6 +601,14 @@ export class SimCanvas {
     const v = Math.max(0, Math.floor(cap));
     if (v === this.tileDetail) return;
     this.tileDetail = v;
+    if (this.material === "printed" && this.net) this.buildPrintedTiles(this.net);
+  }
+
+  /** Set the inter-tile gap (shrink-toward-centroid fraction, shared with the export) and rebuild. */
+  setTileGap(frac: number): void {
+    const v = Math.min(MAX_TILE_GAP, Math.max(MIN_TILE_GAP, frac));
+    if (v === this.tileInset) return;
+    this.tileInset = v;
     if (this.material === "printed" && this.net) this.buildPrintedTiles(this.net);
   }
 
@@ -721,9 +648,9 @@ export class SimCanvas {
         // shrink each corner toward the sub-tile centroid (exposes the bare-cloth hinge strip), then
         // offset along the normal → top plate at +t, wall bases at the hinge plane (s=0), one-sided.
         const corner = (v: [number, number, number], s: number): [number, number, number] => {
-          const ix = v[0] + (gx - v[0]) * TILE_INSET_FRAC;
-          const iy = v[1] + (gy - v[1]) * TILE_INSET_FRAC;
-          const iz = v[2] + (gz - v[2]) * TILE_INSET_FRAC;
+          const ix = v[0] + (gx - v[0]) * this.tileInset;
+          const iy = v[1] + (gy - v[1]) * this.tileInset;
+          const iz = v[2] + (gz - v[2]) * this.tileInset;
           return [ix + nx * s, iy + ny * s, iz + nz * s];
         };
         const t0 = corner(v0, t), t1 = corner(v1, t), t2 = corner(v2, t);
@@ -741,7 +668,88 @@ export class SimCanvas {
     }
     this.thickAttr!.needsUpdate = true;
     this.thickGeo!.computeVertexNormals();
-    this.updateBridges();
+    this.updateJoints();
+  }
+
+  /**
+   * Find the SPHERICAL joints: corner points where ≥2 tiles meet but NO shared (2-face) fold edge
+   * runs through them — i.e. rotating-units pivots. The solver net splits shared corners into
+   * separate vertices, so we cluster by REST position to recover each physical pivot. Tiles that
+   * share a fold edge are already joined by the continuous TPU backing, so those points are skipped;
+   * cut ("C") edges carry no joint and stay open. One small TPU sphere per pivot ties the tiles.
+   */
+  private buildJoints(net: FoldNet, diag: number): void {
+    this.disposeJoints();
+    if (!this.fold) return;
+    const rest = this.fold.model.rest;
+    const q = 1e3; // ~1µm·(unit) snap so coincident split corners cluster together
+    const keyOf = (v: number): string =>
+      `${Math.round(rest[v * 3] * q)}_${Math.round(rest[v * 3 + 1] * q)}_${Math.round(rest[v * 3 + 2] * q)}`;
+    // vertex → incident tiles
+    const vFaces = new Map<number, Set<number>>();
+    net.faces.forEach((f, fi) => f.forEach((v) => (vFaces.get(v) ?? vFaces.set(v, new Set()).get(v)!).add(fi)));
+    // positions that sit on a shared (2-face) edge are handled by the continuous backing, not a sphere
+    const edgeFaces = new Map<string, number>();
+    net.faces.forEach((f) => {
+      for (let k = 0; k < f.length; k++) {
+        const u = f[k], w = f[(k + 1) % f.length], kk = u < w ? `${u}_${w}` : `${w}_${u}`;
+        edgeFaces.set(kk, (edgeFaces.get(kk) ?? 0) + 1);
+      }
+    });
+    const onSharedEdge = new Set<string>();
+    for (const [kk, n] of edgeFaces) {
+      if (n < 2) continue;
+      const u = kk.indexOf("_");
+      onSharedEdge.add(keyOf(Number(kk.slice(0, u))));
+      onSharedEdge.add(keyOf(Number(kk.slice(u + 1))));
+    }
+    // cluster vertices by rest position; a pivot = a cluster touched by ≥2 tiles, off any shared edge
+    const clusters = new Map<string, number[]>();
+    for (let v = 0; v < net.vertices.length; v++) {
+      const k = keyOf(v);
+      (clusters.get(k) ?? clusters.set(k, []).get(k)!).push(v);
+    }
+    const pivots: number[][] = [];
+    for (const [k, verts] of clusters) {
+      if (onSharedEdge.has(k)) continue;
+      const tiles = new Set<number>();
+      for (const v of verts) for (const fi of vFaces.get(v) ?? []) tiles.add(fi);
+      if (tiles.size >= 2) pivots.push(verts);
+    }
+    this.sphPivots = pivots;
+    if (!pivots.length) return;
+    const r = Math.max(diag * 0.01, 1e-4);
+    this.jointGeo = new THREE.SphereGeometry(r, 12, 8);
+    this.jointMat = new THREE.MeshStandardMaterial({ color: COLOR_HINGE, metalness: 0.0, roughness: 0.85 });
+    this.jointMesh = new THREE.InstancedMesh(this.jointGeo, this.jointMat, pivots.length);
+    this.jointMesh.visible = !this.circuitMode; // joints hide while the circuit editor is open
+    this.group.add(this.jointMesh);
+    this.updateJoints();
+  }
+
+  /** Move each spherical joint to the live centroid of its (split) pivot vertices. */
+  private updateJoints(): void {
+    if (!this.jointMesh || !this.sphPivots || !this.fold) return;
+    const p = this.fold.model.position;
+    const m = new THREE.Matrix4();
+    this.sphPivots.forEach((verts, i) => {
+      let x = 0, y = 0, z = 0;
+      for (const v of verts) { x += p[v * 3]; y += p[v * 3 + 1]; z += p[v * 3 + 2]; }
+      const n = verts.length;
+      m.makeTranslation(x / n, y / n, z / n);
+      this.jointMesh!.setMatrixAt(i, m);
+    });
+    this.jointMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  private disposeJoints(): void {
+    if (this.jointMesh) this.group.remove(this.jointMesh);
+    this.jointGeo?.dispose();
+    this.jointMat?.dispose();
+    this.jointMesh = null;
+    this.jointGeo = null;
+    this.jointMat = null;
+    this.sphPivots = null;
   }
 
   // --- Circuit overlay ------------------------------------------------------
@@ -749,7 +757,7 @@ export class SimCanvas {
   /** Enter/exit the circuit editor (flat 2D + tool interactions + snap grid). */
   setCircuitMode(on: boolean): void {
     this.circuitMode = on;
-    if (this.bridgeMesh) this.bridgeMesh.visible = !on; // no hinge straps while authoring the circuit
+    if (this.jointMesh) this.jointMesh.visible = !on; // bare TPU while routing traces; joints return after
     if (this.gridLines) this.gridLines.visible = on;
     if (!on) { this.routeStart = null; this.routeGroup.clear(); this.held = null; this.ghostGroup.clear(); this.select(null); }
     this.setCircuitTool("select"); // start on the select cursor; clears any held part + sets the cursor
@@ -1038,7 +1046,7 @@ export class SimCanvas {
     this.commitCircuit();
   }
 
-  /** Re-pin a part to {face,bary}. Live moves only redraw; `commit` does the full notify + bridge refresh. */
+  /** Re-pin a part to {face,bary}. Live moves only redraw; `commit` does the full notify. */
   private setComponentPos(id: string, face: number, bary: [number, number, number], commit = false): void {
     this.circuit = {
       ...this.circuit,
@@ -1104,23 +1112,10 @@ export class SimCanvas {
     this.group.add(this.gridLines);
   }
 
-  /** Persist a circuit edit: notify, redraw the overlay, and refresh the trace-aware bridges. */
+  /** Persist a circuit edit: notify and redraw the overlay. */
   private commitCircuit(): void {
     this.circuitListener?.(this.circuit);
     this.updateCircuitOverlay();
-    this.refreshBridgesForCircuit();
-  }
-
-  /** Recompute which hinges traces cross and rebuild the bridge layer to drop those straps. */
-  private refreshBridgesForCircuit(): void {
-    if (!this.net) return;
-    const v = this.net.vertices;
-    const flat = (i: number): [number, number, number] => [v[i].x, v[i].y, v[i].z];
-    this.crossedEdges = new Set(resolveCircuit(this.circuit, this.net, flat).crossedEdges);
-    if (this.material === "printed") {
-      this.buildBridges(this.net); // idempotent rebuild honoring crossedEdges
-      this.updateBridges();
-    }
   }
 
   /**
@@ -1207,12 +1202,7 @@ export class SimCanvas {
     this.thickPos = null;
     this.thickAttr = null;
     this.thickMesh = null;
-    this.bridgeGeo?.dispose();
-    this.bridgeGeo = null;
-    this.bridgePos = null;
-    this.bridgeAttr = null;
-    this.bridgeMesh = null;
-    this.bridgeList = null;
+    this.disposeJoints();
     this.tileFaces = null;
     this.tileBary = null;
     this.circuitGroup.clear();
@@ -1226,7 +1216,6 @@ export class SimCanvas {
     this.compCache = [];
     this.pickMesh = null;
     this.pickPos = null;
-    this.crossedEdges = new Set();
     this.cpu = null;
     this.faceMat = null;
     this.creaseLines = [];

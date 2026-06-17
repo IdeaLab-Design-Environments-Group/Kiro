@@ -1,5 +1,5 @@
 import type { FoldScene, SimMaterial } from "../sim/index.js";
-import { DEFAULT_MAX_SUBDIV } from "../model/tile-subdiv.js";
+import { DEFAULT_MAX_SUBDIV, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import { type Circuit, COMPONENT_KINDS, COMPONENT_SPECS, EMPTY_CIRCUIT } from "../model/circuit.js";
 import { buildCircuitStl, type CircuitStl } from "../model/circuit-export.js";
 import type { CircuitTool, SimCanvas } from "./sim-canvas.js";
@@ -23,6 +23,9 @@ export class SimModal {
   private readonly detailControl: HTMLElement;
   private readonly detailSlider: HTMLInputElement;
   private readonly detailValue: HTMLElement;
+  private readonly gapControl: HTMLElement;
+  private readonly gapSlider: HTMLInputElement;
+  private readonly gapValue: HTMLElement;
   private readonly tabs: HTMLButtonElement[];
   private readonly circuitTab: HTMLButtonElement;
   private readonly palette: HTMLElement;
@@ -31,10 +34,12 @@ export class SimModal {
   private canvas: SimCanvas | null = null;
   private material: SimMaterial = "vinyl";
   private detail = DEFAULT_MAX_SUBDIV;
+  private gap = TILE_INSET_FRAC;
   private circuitOn = false;
   private tool: CircuitTool = "select";
   private materialListener: ((m: SimMaterial) => void) | null = null;
   private detailListener: ((d: number) => void) | null = null;
+  private gapListener: ((g: number) => void) | null = null;
   private saveCircuitListener: (() => void) | null = null;
 
   constructor() {
@@ -84,6 +89,10 @@ export class SimModal {
             Detail <span class="sim-detail-value">0</span>
             <input type="range" class="sim-detail-slider" min="0" max="4" step="1" value="0" />
           </label>
+          <label class="sim-fold-control sim-gap-control" title="Width of the bare-hinge gaps between the printed tiles (tile shrink toward its centroid). Matches the STL export.">
+            Gap <span class="sim-gap-value">16%</span>
+            <input type="range" class="sim-gap-slider" min="2" max="45" step="1" value="16" />
+          </label>
           <label class="sim-fold-control">
             Fold <span class="sim-fold-value">0%</span>
             <input type="range" class="sim-fold-slider" min="0" max="100" step="1" value="0" />
@@ -100,6 +109,9 @@ export class SimModal {
     this.detailControl = this.overlay.querySelector(".sim-detail-control")!;
     this.detailSlider = this.overlay.querySelector(".sim-detail-slider")!;
     this.detailValue = this.overlay.querySelector(".sim-detail-value")!;
+    this.gapControl = this.overlay.querySelector(".sim-gap-control")!;
+    this.gapSlider = this.overlay.querySelector(".sim-gap-slider")!;
+    this.gapValue = this.overlay.querySelector(".sim-gap-value")!;
     this.tabs = Array.from(this.overlay.querySelectorAll<HTMLButtonElement>(".sim-tab[data-material]"));
     this.circuitTab = this.overlay.querySelector(".sim-circuit-tab")!;
     this.palette = this.overlay.querySelector(".sim-palette")!;
@@ -115,6 +127,7 @@ export class SimModal {
 
     this.foldSlider.addEventListener("input", () => this.applyFold());
     this.detailSlider.addEventListener("input", () => this.applyDetail());
+    this.gapSlider.addEventListener("input", () => this.applyGap());
     this.syncDetailVisibility();
     this.overlay.querySelector(".sim-modal-close")!.addEventListener("click", () => this.close());
     this.overlay.querySelector(".sim-reset-btn")!.addEventListener("click", () => this.loadWorld());
@@ -163,6 +176,11 @@ export class SimModal {
   /** Notified when the user changes the adaptive-detail slider (controller stores it; export shares it). */
   onDetailChange(cb: (d: number) => void): void {
     this.detailListener = cb;
+  }
+
+  /** Notified when the user changes the gap slider (controller stores it; the STL export shares it). */
+  onGapChange(cb: (g: number) => void): void {
+    this.gapListener = cb;
   }
 
   /** Switch the sim material tab: leave circuit mode, update state, then rebuild (fold % preserved). */
@@ -236,9 +254,11 @@ export class SimModal {
     return buildCircuitStl(c, net, baseName);
   }
 
-  /** The detail slider only matters for 3D-printed tiles — hide it in vinyl/paper mode. */
+  /** Detail and gap only matter for 3D-printed tiles — hide both in vinyl/paper mode. */
   private syncDetailVisibility(): void {
-    this.detailControl.hidden = this.material !== "printed";
+    const hidden = this.material !== "printed";
+    this.detailControl.hidden = hidden;
+    this.gapControl.hidden = hidden;
   }
 
   private applyDetail(): void {
@@ -246,6 +266,13 @@ export class SimModal {
     this.detailValue.textContent = String(this.detail);
     this.canvas?.setTileDetail(this.detail);
     this.detailListener?.(this.detail);
+  }
+
+  private applyGap(): void {
+    this.gap = Number(this.gapSlider.value) / 100; // slider shows a %, stored as the corner→centroid shrink fraction
+    this.gapValue.textContent = `${this.gapSlider.value}%`;
+    this.canvas?.setTileGap(this.gap);
+    this.gapListener?.(this.gap);
   }
 
   /** Enable/disable the 3D Sim button (e.g. only when a foldable model is loaded). */
@@ -280,6 +307,7 @@ export class SimModal {
     try {
       this.canvas.setScene(built.scene);
       this.canvas.setTileDetail(this.detail); // honor the current adaptive-detail setting
+      this.canvas.setTileGap(this.gap); // …and the current gap width
       this.syncDetailVisibility();
       this.applyFold();
       this.canvas.warmToTarget();

@@ -210,8 +210,10 @@ function parseElement(
   void type;
 }
 
-/** loadSVG step 1: read the SVG text into raw vertices + per-type segment buckets. */
-function readSvg(svgText: string): { verts: number[][]; buckets: Record<EdgeType, Segment[]> } {
+/** loadSVG step 1: read the SVG text into raw vertices + per-type segment buckets.
+ *  `includePaths=false` skips `<path>` elements (the dashed corner creases Illustrator emits as
+ *  paths) — reproducing a line-only import like the original offline `svg2fold.py`. */
+function readSvg(svgText: string, includePaths = true): { verts: number[][]; buckets: Record<EdgeType, Segment[]> } {
   const verts: number[][] = [];
   const buckets: Record<EdgeType, Segment[]> = {
     border: [], mountain: [], valley: [], cut: [], triangulation: [], hinge: [],
@@ -220,6 +222,7 @@ function readSvg(svgText: string): { verts: number[][]; buckets: Record<EdgeType
   let m: RegExpExecArray | null;
   while ((m = elementRe.exec(svgText)) !== null) {
     const tag = m[1].toLowerCase();
+    if (tag === "path" && !includePaths) continue;
     const attrs = parseAttrs(m[2]);
     const type = typeForStroke(getStroke(attrs));
     if (type == null) continue;
@@ -595,8 +598,8 @@ export interface SvgImportStats {
 }
 
 /** Parse + clean + find faces — the 2D Fold ready for downstream processFold. */
-function svgToFold(svgText: string, vertTol = DEFAULT_VERT_TOL): Fold {
-  const { verts, buckets } = readSvg(svgText);
+function svgToFold(svgText: string, vertTol = DEFAULT_VERT_TOL, includePaths = true): Fold {
+  const { verts, buckets } = readSvg(svgText, includePaths);
 
   const fold: Fold = { vertices_coords: verts, edges_vertices: [], edges_assignment: [], edges_foldAngles: [] };
   for (const { type, assignment, angle } of ASSEMBLE_ORDER) {
@@ -642,6 +645,8 @@ const round = (x: number, dp = 5): number => {
 
 export interface SvgImportOptions {
   vertTol?: number;
+  /** Parse `<path>` creases (default true = faithful to OS). False = line-only, like svg2fold.py. */
+  includePaths?: boolean;
   /** Centre the net on its bounding-box centre (cosmetic; the solver recenters anyway). */
   recenter?: boolean;
   title?: string;
@@ -657,7 +662,7 @@ export interface SvgImportOptions {
  * the Miyamoto tower's opacity-0.5 strokes. No driven footprint, so it **free-folds** like OS.
  */
 export function importOrigamiSimulatorSvg(svgText: string, opts: SvgImportOptions = {}): FoldFile & { stats: SvgImportStats } {
-  const fold = svgToFold(svgText, opts.vertTol);
+  const fold = svgToFold(svgText, opts.vertTol, opts.includePaths ?? true);
 
   let coords = fold.vertices_coords;
   if (opts.recenter) {
@@ -697,5 +702,10 @@ export function importOrigamiSimulatorSvg(svgText: string, opts: SvgImportOption
     faces_vertices: fold.faces_vertices,
     stats,
   } as FoldFile & { stats: SvgImportStats };
+  // A crease pattern with cut ("C") strokes is kirigami — stamp an `fkld:` provenance key so the
+  // scene router treats it as such (FKLD is FOLD + the `fkld:` namespace). Pure origami stays plain.
+  if (stats.cuts > 0) {
+    (file as Record<string, unknown>)["fkld:import"] = { source: "origami-simulator-svg" };
+  }
   return file;
 }

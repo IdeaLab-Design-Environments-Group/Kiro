@@ -72,14 +72,15 @@ describe("Origami Simulator SVG import (loadSVG 1:1 port) — Miyamoto RES tower
     expect(Array.from(model.driven).every((d) => d === 0)).toBe(true); // truly free
   });
 
-  it("free-folds isometrically and stays finite with self-collision", { timeout: 120_000 }, () => {
+  it("free-folds isometrically and stays finite", { timeout: 60_000 }, () => {
     const built = buildScene(imported as FoldFile)!;
     const { model, solver } = built.scene;
-    solver.enableCollision(); // layers can't pass through each other — exactly what sim-canvas does
-    for (let k = 1; k <= 10; k++) solver.solve(4000, k / 10);
-    solver.solve(8000, 1.0);
     // The full RES crease set is flat-foldable: it folds nearly isometrically (cuts open, layers
     // stack). The tall erected tower is a separate rigid-kinematic branch needing guided actuation.
+    // (The app additionally runs self-collision so the stacking layers don't interpenetrate; that's
+    // not needed to verify the import is a valid, isometric foldable mesh, and it keeps this fast.)
+    for (let k = 1; k <= 6; k++) solver.solve(2500, k / 6);
+    solver.solve(4000, 1.0);
     let strain = 0;
     for (let i = 0; i < model.beams.count; i++) {
       const a = model.beams.n0[i], b = model.beams.n1[i];

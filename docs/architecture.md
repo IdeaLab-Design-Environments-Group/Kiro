@@ -92,7 +92,8 @@ Model files:
 - `src/model/fold-file.ts` defines FOLD/FKLD shell types.
 - `src/model/derive-facts.ts` maps loaded models to "Derived" rows.
 - `src/model/fkld-metadata.ts` maps FKLD/FOLD objects to metadata sections.
-- `src/model/geometry.ts` and `src/model/types.ts` hold kirigami math and types.
+- `kirigami/model/geometry.ts` and `kirigami/model/types.ts` hold the
+  transferred AKDE kirigami math and types exposed through `@kirigami/model`.
 
 View files:
 
@@ -116,9 +117,18 @@ Simulation files:
 
 Pipeline files:
 
+- `src/pipeline/cutfold25d.ts` implements the orthogonal 2.5D text/art route.
+- `src/pipeline/bst/` implements the bistable star tiling route.
 - `src/pipeline/types.ts` defines cross-stage DTOs and `PipelineError`.
 - `src/pipeline/import.ts` parses OBJ and ASCII STL text into `TriMesh`.
 - `src/pipeline/conditioning.ts` repairs and gates imported meshes.
 - `src/pipeline/mesh.ts` derives topology and one-ring fans.
 - `src/pipeline/curvature.ts` computes defects and target dihedrals.
 - `src/pipeline/plan-cuts.ts` routes cut forests over the mesh graph.
+
+Circuit files:
+
+- `src/model/circuit.ts` defines placed SMD parts and traces.
+- `src/model/circuit-geometry.ts` resolves flat/folded part and trace geometry.
+- `src/model/circuit-export.ts` writes the separate conductor/footprint STL.
+- `src/view/sim-modal.ts` and `src/view/sim-canvas.ts` own the circuit authoring UI.

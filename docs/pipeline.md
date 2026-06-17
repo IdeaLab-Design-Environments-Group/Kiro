@@ -2,8 +2,16 @@
 
 `src/pipeline/` is the general mesh-to-kirigami conversion scaffold. It is
 separate from the app MVC shell and from the origami simulator. The controller
-will eventually call this pipeline for `.obj` and `.stl` inputs; the current app
-still treats mesh conversion as a stub.
+calls this pipeline for `.obj` and `.stl` inputs when the header method selector
+is set to the normal Kirigamizer route.
+
+Two sibling generation routes also live under `src/pipeline/`:
+
+- `cutfold25d.ts` — orthogonal 2.5D text/art signage from pixel height maps;
+- `bst/` — bistable star tiling generation and mesh surface fitting.
+
+Those are documented separately in `docs/subsystems/cutfold25d.md` and
+`docs/subsystems/bst-pipeline.md`; they do not run through every M1-M5 stage.
 
 ## Scope
 
@@ -21,6 +29,8 @@ Inputs and outputs are plain DTOs from `src/pipeline/types.ts`.
 
 | Stage | File | Purpose |
 | --- | --- | --- |
+| 2.5D route | `src/pipeline/cutfold25d.ts` | Generate orthogonal parallel-cut relief signs from bitmap/text height maps. |
+| BST route | `src/pipeline/bst/` | Generate bistable star tiling FKLDs, optionally fit to a target mesh. |
 | M1 import | `src/pipeline/import.ts` | Parse OBJ or ASCII STL text into `TriMesh`. |
 | M1 conditioning | `src/pipeline/conditioning.ts` | Weld coincident vertices, drop degenerates, orient faces, reject unsupported genus. |
 | M1 topology | `src/pipeline/mesh.ts` | Build edges, one-ring fans, boundary sets, Euler/boundary helpers. |
@@ -46,6 +56,10 @@ The main cross-stage DTOs are:
 
 All lengths are millimetres. All angles are radians except at FOLD/FKLD emission
 boundaries where `edges_foldAngle` is stored in degrees.
+
+2.5D and BST have their own DTOs (`CutFold25dResult`, `BstParams`,
+`BstResult`) because their inputs are not general conditioned meshes in the
+same shape as M1-M5 intermediates.
 
 ## Import Rules
 
@@ -256,3 +270,6 @@ before adding a new stage file.
 - Add tests for each stage before wiring it into the controller.
 - Keep `kirigamize.ts` as a facade; stage-specific algorithms belong in their
   stage files.
+- Keep sibling routes explicit. If a feature does not consume the M1-M5 DTO
+  chain, document it as a sibling pipeline instead of forcing it into the stage
+  table.

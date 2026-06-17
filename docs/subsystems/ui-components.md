@@ -12,8 +12,9 @@ render passed data, and emit callbacks.
 | `src/view/header-actions.ts` | `HeaderActions` | Header buttons and callbacks. |
 | `src/view/metadata-panel.ts` | `MetadataPanel` | FKLD metadata section rendering. |
 | `src/view/viewer-frame.ts` | `ViewerFrame` | iframe bridge and current viewer model. |
+| `src/view/pattern-editor-modal.ts` | `PatternEditorModal` | Interactive crease-grid editor, presets, use/download callbacks. |
 | `src/view/sim-modal.ts` | `SimModal` | Modal shell, fold slider, lazy canvas loading. |
-| `src/view/sim-canvas.ts` | `SimCanvas` | Three.js simulation scene rendering. |
+| `src/view/sim-canvas.ts` | `SimCanvas` | Three.js simulation scene rendering, printed-tile display, and circuit editor interactions. |
 
 ## View Rules
 
@@ -52,6 +53,7 @@ Output intent:
 Output intents:
 
 - `onCreatePyramid(handler)`;
+- `onCreate25d(handler)`;
 - `onLoadSample(handler)`;
 - `onKirigamize(handler)`.
 
@@ -62,7 +64,7 @@ State update:
 Button order:
 
 ```text
-[3D Sim] [Create pyramid] [Load sample] [Kirigamize ▶]
+[3D Sim] [Create pyramid] [Create 2.5D] [Load sample] [method] [Kirigamize ▶]
 ```
 
 `3D Sim` is mounted by `SimModal`; the remaining buttons are appended by
@@ -102,6 +104,8 @@ Behavior:
 - lazy-loads `SimCanvas`;
 - rebuilds the scene on reset;
 - forwards fold slider value.
+- owns material/detail controls and the Circuit tab;
+- can export the saved circuit as a separate STL.
 
 ### SimCanvas
 
@@ -117,6 +121,7 @@ Behavior:
 - chooses GPU/CPU where appropriate;
 - renders faces and line overlays;
 - owns orbit controls and Three.js resources.
+- enters a flat orthographic authoring mode for circuit placement/routing.
 
 ## Testing
 
@@ -128,4 +133,3 @@ View tests should use DOM mocks and assert:
 - render methods replace prior contents;
 - iframe messages update `ViewerFrame.current()`;
 - modals stop the canvas on close.
-

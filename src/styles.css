@@ -48,7 +48,9 @@ body {
 
 .header-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
 
@@ -437,14 +439,19 @@ body {
 
 .sim-modal-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  justify-content: flex-end;
+  gap: 0.5rem 0.75rem;
   padding: 0.6rem 1rem;
   border-top: 1px solid #e2e2e2;
 }
 
+/* Status takes its own full-width line so the Detail/Gap/Fold sliders never
+ * collide with it (the footer wraps the controls onto the next row instead). */
 .sim-status {
+  flex: 1 1 100%;
+  min-width: 0;
   font-size: 0.8rem;
   color: #555;
 }
@@ -464,7 +471,8 @@ body {
   font-size: 0.8rem;
 }
 
-.sim-detail-control[hidden] {
+.sim-detail-control[hidden],
+.sim-gap-control[hidden] {
   display: none;
 }
 
@@ -477,7 +485,9 @@ body {
   white-space: nowrap;
 }
 
-.sim-fold-value {
+.sim-fold-value,
+.sim-detail-value,
+.sim-gap-value {
   display: inline-block;
   min-width: 2.8em;
   text-align: right;
@@ -486,7 +496,9 @@ body {
 }
 
 .sim-fold-slider {
-  width: clamp(120px, 22vw, 240px);
+  /* Three sliders now share the row — keep each narrow enough that Detail +
+   * Gap + Fold + Reset fit one line on a typical modal width. */
+  width: clamp(92px, 12vw, 160px);
   cursor: pointer;
   accent-color: #1f6feb;
 }
@@ -523,17 +535,6 @@ body {
 .export-trigger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-/* Kirigamize method selector (Cut & fold / Bistable star tiling), sits before the ▶ button. */
-.method-select {
-  font: inherit;
-  padding: 0.35rem 0.4rem;
-  border: 1px solid #c7c7d1;
-  background: #fff;
-  color: #333;
-  border-radius: 4px;
-  cursor: pointer;
 }
 
 /* ---- Footer legend ---- */

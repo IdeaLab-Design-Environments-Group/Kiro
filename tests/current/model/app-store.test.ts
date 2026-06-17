@@ -10,6 +10,7 @@ describe("model/app-store", () => {
       viewerShown: null,
       simMaterial: "vinyl",
       simDetail: 0,
+      simTileGap: 0.16,
       circuit: { components: [], traces: [] },
     });
   });

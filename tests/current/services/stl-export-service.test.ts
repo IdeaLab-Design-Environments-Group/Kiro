@@ -14,7 +14,7 @@ describe("services/stl-export-service", () => {
 
     const out = resolveStlExport(model, shown, 3.5, 3);
 
-    expect(buildStlExport).toHaveBeenCalledWith(shown.object, "viewer", 3.5, 3);
+    expect(buildStlExport).toHaveBeenCalledWith(shown.object, "viewer", 3.5, 3, undefined);
     expect(out).toEqual({ object: shown.object, name: "viewer", height: 3.5, detail: 3 });
   });
 
@@ -25,7 +25,7 @@ describe("services/stl-export-service", () => {
 
     const out = resolveStlExport(model, null); // no args → undefined (builder uses its defaults)
 
-    expect(buildStlExport).toHaveBeenCalledWith(model.object, "house", undefined, undefined);
+    expect(buildStlExport).toHaveBeenCalledWith(model.object, "house", undefined, undefined, undefined);
     expect(out).toEqual({ object: model.object, name: "house", height: undefined, detail: undefined });
   });
 

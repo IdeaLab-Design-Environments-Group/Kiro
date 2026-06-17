@@ -1,8 +1,8 @@
 # Development
 
-This repo is a Vite/TypeScript app. The current conversion pipeline is still a
-passthrough stub for FOLD/FKLD files, with mesh import reserved for the future
-Kirigamizer conversion pipeline.
+This repo is a Vite/TypeScript app with several active generation paths: the
+general mesh Kirigamizer pipeline, AKDE pyramid creation, 2.5D signage,
+bistable star tiling, pattern editing, simulation, and circuit export.
 
 For placement decisions, read these first:
 
@@ -42,7 +42,12 @@ Use the MVC boundary when adding code:
 - Add DOM/WebGL UI under `src/view/`.
 - Add app orchestration under `src/controller/`.
 - Add mesh-to-kirigami conversion stages under `src/pipeline/`.
+- Add standalone generation routes that do not consume the full M1-M5 chain
+  under `src/pipeline/`, but document them as sibling routes. Current examples:
+  `src/pipeline/cutfold25d.ts` and `src/pipeline/bst/`.
 - Add folding physics or scene construction under `src/sim/`.
+- Add circuit data/export logic under `src/model/circuit*.ts`; circuit UI
+  belongs in `src/view/sim-modal.ts` and `src/view/sim-canvas.ts`.
 - Keep `src/main.ts` as a composition root.
 
 Examples:

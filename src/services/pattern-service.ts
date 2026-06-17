@@ -11,8 +11,6 @@ import { AppError } from "../core/errors.js";
 import type { FoldFile } from "../model/fold-file.js";
 // General mesh→pattern pipeline (M1–M5).
 import { kirigamizeText } from "../pipeline/kirigamize.js";
-// Bistable Star Tiling surface-programming (Toyooka & Tachi, DETC2022).
-import { bstFromMesh } from "../pipeline/bst/index.js";
 // Transferred AKDE creation pipeline: inputs → KirigamiState → FKLD pattern.
 import { computeState, defaultInputs } from "@kirigami/model/geometry.js";
 import { buildFkldFile } from "@kirigami/model/fkld-export.js";
@@ -55,33 +53,6 @@ export function kirigamizeMesh(text: string, ext: "obj" | "stl", sourceName: str
       `Kirigamized "${sourceName}" → ${cuts} cuts${vents ? `, ${vents} vent(s)` : ""}, ` +
       `${result.sheet.faces.length} faces — ${verdict}.`,
     ok: !(r && !r.converged),
-  };
-}
-
-/**
- * Bistable Star Tiling: surface-program the mesh into an auxetic star-tiling kirigami that deploys
- * from flat onto the target surface (Toyooka & Tachi, DETC2022/MESA-88761). The flat contracted
- * tiling is the crease pattern; the relaxed-onto-surface state is the deployment goal. Throws
- * AppError on failure (e.g. an unusable mesh).
- */
-export function bstSurfaceProgram(text: string, ext: "obj" | "stl", sourceName: string): PatternOutcome {
-  let out: ReturnType<typeof bstFromMesh>;
-  try {
-    out = bstFromMesh(text, ext);
-  } catch (err) {
-    throw new AppError("pipeline", `Bistable star tiling failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  const { fkld, result, diag } = out;
-  const name = sourceName.replace(/\.(obj|stl)$/i, "") + "-bst.fkld";
-  const tiles = result.contracted.tiles.length;
-  return {
-    fkld,
-    name,
-    summary:
-      `Bistable star tiling of "${sourceName}" → ${tiles} rigid tiles; ` +
-      `${diag.converged ? "deployment fit converged" : "approximate deployment fit"} ` +
-      `(residual ${(diag.residual * 100).toFixed(1)}%). Open 3D Sim to deploy onto the surface.`,
-    ok: diag.converged,
   };
 }
 

@@ -146,6 +146,34 @@ export function eulerCharacteristic(mesh: TriMesh, topo: MeshTopology): number {
   return mesh.vertices.length - topo.edges.length + mesh.faces.length;
 }
 
+/**
+ * Number of connected components (faces joined through shared manifold edges). A single watertight
+ * shell is 1; two disjoint closed surfaces are 2. Used by the genus gate: the Euler relation is
+ * χ = 2C − 2g − b, so the single-component formula (C=1) under-reports genus as negative when the
+ * mesh is actually several disjoint shells.
+ */
+export function countComponents(mesh: TriMesh, topo: MeshTopology): number {
+  const nf = mesh.faces.length;
+  if (nf === 0) return 0;
+  const parent = Array.from({ length: nf }, (_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  for (const e of topo.edges) {
+    for (let i = 1; i < e.faces.length; i++) {
+      const ra = find(e.faces[0]), rb = find(e.faces[i]);
+      if (ra !== rb) parent[ra] = rb;
+    }
+  }
+  const roots = new Set<number>();
+  for (let f = 0; f < nf; f++) roots.add(find(f));
+  return roots.size;
+}
+
 /** Length of edge e in mm. */
 export function edgeLength(mesh: TriMesh, topo: MeshTopology, e: number): number {
   const { a, b } = topo.edges[e];

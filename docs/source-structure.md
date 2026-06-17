@@ -20,16 +20,32 @@ src/
     model-loader.ts
     pattern-service.ts
     sim-scene-service.ts
+    stl-export-service.ts
     svg-export-service.ts
   model/
     app-store.ts
+    circuit.ts
+    circuit-export.ts
+    circuit-geometry.ts
     derive-facts.ts
     fkld-metadata.ts
     fkld-svg-export.ts
     fold-file.ts
     pattern-grid.ts
+    stl-ascii.ts
+    stl-export.ts
+    tile-subdiv.ts
   pipeline/
+    bst/
+      bistable-bar.ts
+      emit-bst.ts
+      index.ts
+      mesh-project.ts
+      relax.ts
+      star-tiling.ts
+      types.ts
     conditioning.ts
+    cutfold25d.ts
     curvature.ts
     emit.ts
     import.ts
@@ -115,6 +131,7 @@ New features land here, not in the controller.
 | `model-loader.ts` | Text→`LoadedModel` parsing, FileReader IO (callback-style by design), sample fetching, loaded-status strings. |
 | `pattern-service.ts` | Single facade over the creation paths — the M1–M5 pipeline (`kirigamizeMesh`), the AKDE creation pipeline (`createAkdePyramid`), and the **pattern editor** (`fkldFromPatternGrid` / `serializePatternGrid`) — each returning a narrow `PatternOutcome`. Owns the `fkld:` namespace stamping for the editor draft. |
 | `sim-scene-service.ts` | `resolveSimScene(model, shown)` — pure policy for what the 3D Sim folds. |
+| `stl-export-service.ts` | `resolveStlExport(model, shown, heightUnits, maxSubdiv)` — pure policy for printed-tile STL export source selection. |
 | `svg-export-service.ts` | `resolveSvgExport(model, shown)` — pure policy for what SVG export targets. |
 
 Rules:
@@ -129,11 +146,17 @@ Rules:
 | File | Responsibility |
 | --- | --- |
 | `app-store.ts` | Observable UI state: loaded model, status, and `viewerShown` (what the viewer iframe displays). |
+| `circuit.ts` | SMD component/trace data model and fab.pretty-inspired two-terminal footprint specs. |
+| `circuit-geometry.ts` | Resolves circuit parts, pads, traces, crossed edges, and folded/flat positions. |
+| `circuit-export.ts` | Builds the separate flat circuit STL for traces, pads, and component bodies. |
 | `fold-file.ts` | Minimal FOLD/FKLD types and `isFkld`. |
 | `derive-facts.ts` | Loaded model to Derived panel rows. |
 | `fkld-metadata.ts` | FOLD/FKLD object to metadata panel sections. |
 | `fkld-svg-export.ts` | FOLD/FKLD flat pattern to cut/score SVG payload. |
 | `pattern-grid.ts` | Secondary design path: a paintable square lattice (Origami-Simulator crease vocabulary) compiled to a triangulated FOLD draft (`gridToFold`) + foldable presets. Pure; the service stamps the `fkld:` keys. |
+| `stl-ascii.ts` | Shared ASCII-STL triangle/box helpers. |
+| `stl-export.ts` | Printed tile STL export path. |
+| `tile-subdiv.ts` | Shared printed-tile subdivision/inset constants used by sim rendering and STL export. |
 
 Kirigami geometry/types (`KirigamiState`, `computeState`, …) live in
 `@kirigami/model` — the single source of truth. The former `src/model/types.ts`
@@ -161,7 +184,7 @@ Rules:
 | `pattern-editor-modal.ts` | Interactive crease-pattern grid editor (secondary design path): tool palette, presets, paints a `PatternGrid`, emits `onUse(grid)` + a download serializer. |
 | `header-actions.ts` | Header buttons and intent callbacks. |
 | `sim-modal.ts` | 3D simulation modal shell and fold slider. |
-| `sim-canvas.ts` | Three.js/WebGL simulation rendering and animation policy. |
+| `sim-canvas.ts` | Three.js/WebGL simulation rendering, printed-tile display, circuit editor, and animation policy. |
 
 Rules:
 
@@ -179,6 +202,7 @@ Rules:
 | File | Stage | Responsibility |
 | --- | --- | --- |
 | `types.ts` | shared | DTOs, `PipelineError`, cross-stage contracts. |
+| `cutfold25d.ts` | 2.5D | Orthogonal cut-and-fold signage generator from bitmap/text height maps. |
 | `import.ts` | M1 | Parse OBJ/ASCII STL text into `TriMesh`. |
 | `conditioning.ts` | M1 | Weld, drop degenerates, orient, genus gate. |
 | `mesh.ts` | M1 | Topology, edge keys, face angles, boundary loops, wedges. |
@@ -190,6 +214,11 @@ Rules:
 | `verify.ts` | M5 | Sim-based equilibrium verification metrics. |
 | `kirigamize.ts` | driver | Full pipeline facade and retry schedule. |
 | `index.ts` | barrel | Node-safe exports. |
+
+`src/pipeline/bst/` is a sibling pipeline, not an M-stage file group. It owns
+bistable star tiling generation, surface-fit relaxation, bistable bar placement,
+and FKLD emission for the `Bistable star tiling` method selector path. See
+`docs/subsystems/bst-pipeline.md`.
 
 Rules:
 

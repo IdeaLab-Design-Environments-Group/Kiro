@@ -1,12 +1,16 @@
 /**
- * Regenerate `public/examples/res-square-tower.fkld` from Yoshinobu Miyamoto's RES square-tower
- * crease pattern, by running the 1:1 Origami Simulator SVG importer (`src/sim/svg-import.ts`) over
- * the original asset `public/examples/miyamotoTower.svg` (copied verbatim from
- * amandaghassaei/OrigamiSimulator `assets/Kirigami/miyamotoTower.svg`).
+ * Regenerate the bundled Miyamoto RES square-tower examples from Yoshinobu Miyamoto's crease
+ * pattern, by running the 1:1 Origami Simulator SVG importer (`src/sim/svg-import.ts`) over the
+ * original asset `public/examples/miyamotoTower.svg` (copied verbatim from
+ * amandaghassaei/OrigamiSimulator `assets/Kirigami/miyamotoTower.svg`). Replaces the old offline
+ * `svg2fold.py`: both examples now come from the same ported loadSVG logic the app uses.
  *
- * This replaces the old offline `svg2fold.py`: the example is now produced by the same ported
- * loadSVG logic the app uses, so "steal the sim 1:1 + steal the tower example from there" is
- * end-to-end faithful. Free-fold, authentic OS angles (opacity 0.5 ⇒ M −90° / V +90°).
+ * Two variants (see raw/kirigamizer-svg-import-2026-06.md):
+ *   • res-square-tower.fkld        — FAITHFUL full import (paths in: 20 M / 56 V). The full RES
+ *     crease set is flat-foldable, so it free-folds ISOMETRICALLY into a flat layer stack — exactly
+ *     Origami Simulator's dynamic-solver behaviour. The tall tower is a guided rigid-kinematic branch.
+ *   • res-square-tower-erect.fkld  — LINE-ONLY import (includePaths:false: 8 M / 24 V, like the old
+ *     svg2fold.py). Over-constrained, so it free-ERECTS into a visible tower (h/w ≈ 0.52).
  *
  * Run headless:  npx vite-node scripts/gen-res-tower.ts
  */
@@ -19,61 +23,80 @@ import type { FoldFile } from "../src/model/fold-file.js";
 const root = resolve(import.meta.dirname, "..");
 const svg = readFileSync(resolve(root, "public/examples/miyamotoTower.svg"), "utf8");
 
-const imported = importOrigamiSimulatorSvg(svg, {
-  recenter: true,
-  title: "RES Square Tower — Yoshinobu Miyamoto (kirigami, free-fold)",
-  creator: "kirigamizer: Origami Simulator SVG → FOLD (svg-import.ts, 1:1 loadSVG port)",
-  author: "Yoshinobu Miyamoto (pattern); imported from Origami Simulator SVG",
-  description:
-    "RES Square Tower kirigami crease pattern by Yoshinobu Miyamoto. Source SVG: " +
-    "amandaghassaei/OrigamiSimulator assets/Kirigami/miyamotoTower.svg. Imported via the kirigamizer " +
-    "1:1 port of Origami Simulator's loadSVG; stroke opacity 0.5 → M −90° / V +90°; free-fold.",
-  unit: "mm",
-});
-
-const { stats, ...fold } = imported;
-// Mark as FKLD (kirigami) + record provenance.
-(fold as Record<string, unknown>)["fkld:source"] = {
-  origin: "amandaghassaei/OrigamiSimulator",
-  asset: "assets/Kirigami/miyamotoTower.svg",
-  importer: "src/sim/svg-import.ts (1:1 pattern.js loadSVG port)",
-  foldMode: "free",
-  angleEncoding: "stroke-opacity → ±opacity·π (0.5 ⇒ ±90°)",
-};
-
-const outPath = resolve(root, "public/examples/res-square-tower.fkld");
-writeFileSync(outPath, JSON.stringify(fold), "utf8");
-
-console.log("Imported Miyamoto RES tower from SVG:");
-console.log("  vertices:", stats.vertices, " faces:", stats.faces);
-console.log(`  M=${stats.mountains}  V=${stats.valleys}  F=${stats.facets}  C=${stats.cuts}  B=${stats.borders}`);
-console.log("  wrote:", outPath);
-
-// Quick fold sanity check — free fold with self-collision (exactly what the app's 3D Sim does).
-const built = buildScene(fold as FoldFile);
-if (!built) throw new Error("buildScene returned null — file not foldable");
-const { model, solver } = built.scene;
-solver.enableCollision();
-console.log(`  scene: mode=${built.mode} sim=${built.sim}  nodes=${model.numNodes} (flat verts=${stats.vertices}; cuts split add ${model.numNodes - stats.vertices})`);
-
-for (let k = 1; k <= 10; k++) solver.solve(6000, k / 10);
-solver.solve(20000, 1.0);
-
-let strain = 0;
-let finite = true;
-for (let i = 0; i < model.beams.count; i++) {
-  const a = model.beams.n0[i], b = model.beams.n1[i];
-  const l = Math.hypot(
-    model.position[3 * a] - model.position[3 * b],
-    model.position[3 * a + 1] - model.position[3 * b + 1],
-    model.position[3 * a + 2] - model.position[3 * b + 2],
-  );
-  strain += Math.abs(l / model.beams.rest[i] - 1);
+interface Variant {
+  out: string;
+  includePaths: boolean;
+  title: string;
+  expectErect: boolean;
 }
-strain /= Math.max(1, model.beams.count);
-for (let i = 0; i < model.position.length; i++) if (!Number.isFinite(model.position[i])) finite = false;
-// The faithful full-RES crease set is flat-foldable: the explicit dynamic solver folds it
-// ISOMETRICALLY (cuts open, layers stack) — exactly Origami Simulator's dynamic-solver behaviour.
-// The tall erected tower is a separate rigid-kinematic branch (guided actuation / rigid solver).
-console.log(`  folded isometrically: barStrain=${(strain * 100).toFixed(2)}%  finite=${finite}`);
-console.log(strain < 0.05 && finite ? "  ✓ imports + folds isometrically (cuts open, layers stack)" : "  ✗ unexpected: non-isometric or non-finite");
+
+const VARIANTS: Variant[] = [
+  {
+    out: "res-square-tower.fkld",
+    includePaths: true,
+    title: "RES Square Tower — Yoshinobu Miyamoto (kirigami, faithful OS import, free fold)",
+    expectErect: false,
+  },
+  {
+    out: "res-square-tower-erect.fkld",
+    includePaths: false,
+    title: "RES Square Tower — Yoshinobu Miyamoto (kirigami, line-only, free-erects)",
+    expectErect: true,
+  },
+];
+
+for (const v of VARIANTS) {
+  const imported = importOrigamiSimulatorSvg(svg, {
+    recenter: true,
+    includePaths: v.includePaths,
+    title: v.title,
+    creator: "kirigamizer: Origami Simulator SVG → FOLD (svg-import.ts, 1:1 loadSVG port)",
+    author: "Yoshinobu Miyamoto (pattern); imported from Origami Simulator SVG",
+    description:
+      "RES Square Tower kirigami crease pattern by Yoshinobu Miyamoto. Source SVG: " +
+      "amandaghassaei/OrigamiSimulator assets/Kirigami/miyamotoTower.svg. Imported via the kirigamizer " +
+      `1:1 port of Origami Simulator's loadSVG (${v.includePaths ? "faithful, <path> creases in" : "line-only, <path> creases dropped"}); ` +
+      "stroke opacity 0.5 → M −90° / V +90°; free-fold.",
+    unit: "mm",
+  });
+
+  const { stats, ...fold } = imported;
+  (fold as Record<string, unknown>)["fkld:source"] = {
+    origin: "amandaghassaei/OrigamiSimulator",
+    asset: "assets/Kirigami/miyamotoTower.svg",
+    importer: "src/sim/svg-import.ts (1:1 pattern.js loadSVG port)",
+    variant: v.includePaths ? "faithful-full" : "line-only",
+    foldMode: "free",
+    angleEncoding: "stroke-opacity → ±opacity·π (0.5 ⇒ ±90°)",
+  };
+
+  writeFileSync(resolve(root, "public/examples", v.out), JSON.stringify(fold), "utf8");
+
+  console.log(`\n${v.out}  (${v.includePaths ? "faithful" : "line-only"})`);
+  console.log(`  vertices=${stats.vertices} faces=${stats.faces}  M=${stats.mountains} V=${stats.valleys} F=${stats.facets} C=${stats.cuts} B=${stats.borders}`);
+
+  // Free-fold sanity check (no collision — fast; matches the headless tests).
+  const built = buildScene(fold as FoldFile);
+  if (!built) throw new Error(`buildScene returned null for ${v.out}`);
+  const { model, solver } = built.scene;
+  for (let k = 1; k <= 10; k++) solver.solve(6000, k / 10);
+  solver.solve(20000, 1.0);
+
+  let zLo = Infinity, zHi = -Infinity, xLo = Infinity, xHi = -Infinity, yLo = Infinity, yHi = -Infinity, strain = 0;
+  for (let i = 0; i < model.numNodes; i++) {
+    const x = model.position[3 * i], y = model.position[3 * i + 1], z = model.position[3 * i + 2];
+    zLo = Math.min(zLo, z); zHi = Math.max(zHi, z); xLo = Math.min(xLo, x); xHi = Math.max(xHi, x); yLo = Math.min(yLo, y); yHi = Math.max(yHi, y);
+  }
+  for (let i = 0; i < model.beams.count; i++) {
+    const a = model.beams.n0[i], b = model.beams.n1[i];
+    const l = Math.hypot(model.position[3 * a] - model.position[3 * b], model.position[3 * a + 1] - model.position[3 * b + 1], model.position[3 * a + 2] - model.position[3 * b + 2]);
+    strain += Math.abs(l / model.beams.rest[i] - 1);
+  }
+  strain /= Math.max(1, model.beams.count);
+  const h = zHi - zLo, w = Math.max(xHi - xLo, yHi - yLo);
+  let finite = true;
+  for (let i = 0; i < model.position.length; i++) if (!Number.isFinite(model.position[i])) finite = false;
+  const ok = finite && (v.expectErect ? h > 0.4 * w : strain < 0.05 && h < 0.3 * w);
+  console.log(`  free fold: h/w=${(h / w).toFixed(3)}  barStrain=${(strain * 100).toFixed(2)}%  finite=${finite}`);
+  console.log(`  ${ok ? "✓" : "✗"} ${v.expectErect ? "erects into a visible tower" : "folds isometrically (flat stack — faithful OS dynamic-solver behaviour)"}`);
+}

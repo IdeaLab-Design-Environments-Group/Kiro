@@ -8,8 +8,9 @@ modules. They keep `AppController` thin and testable.
 | File | Role |
 | --- | --- |
 | `src/services/model-loader.ts` | File text parsing, `FileReader` wrapper, sample fetch, loaded-status messages. |
-| `src/services/pattern-service.ts` | Facade for mesh kirigamizing and AKDE pyramid creation. |
+| `src/services/pattern-service.ts` | Facade for mesh kirigamizing, BST generation, 2.5D signage, AKDE pyramid creation, and pattern-editor FKLD emission. |
 | `src/services/sim-scene-service.ts` | Resolve what 3D Sim should fold. |
+| `src/services/stl-export-service.ts` | Resolve what printed-tile STL export should target. |
 | `src/services/svg-export-service.ts` | Resolve what SVG export should target. |
 | `src/core/errors.ts` | Shared `AppError` and status conversion used by services/controller. |
 
@@ -49,10 +50,13 @@ Important distinction:
 
 ## Pattern Service
 
-`pattern-service.ts` has two creation paths:
+`pattern-service.ts` has multiple creation paths:
 
 - `kirigamizeMesh`: general OBJ/STL mesh-to-FKLD pipeline;
+- `bstSurfaceProgram`: bistable star tiling surface-fit route;
 - `createAkdePyramid`: transferred AKDE parametric pyramid path.
+- `create25dSign`: orthogonal 2.5D cut-and-fold text/art route;
+- `fkldFromPatternGrid`: interactive pattern-editor route.
 
 Both return `PatternOutcome`:
 
@@ -67,6 +71,10 @@ interface PatternOutcome {
 
 The controller should not inspect full `KirigamizeResult` internals. Tests and
 pipeline UI can inspect those later through dedicated APIs.
+
+Guided routes such as BST and 2.5D must return FKLD with a `foldedForm` frame
+and `fkld:vertices_driven`; otherwise the generic free fold can stay flat or
+settle into the wrong symmetric branch.
 
 ## Sim Scene Service
 
@@ -88,6 +96,18 @@ export viewerShown first, otherwise loaded fold model
 
 This preserves "what you see is what you cut".
 
+## STL Export Service
+
+`resolveStlExport(model, shown, heightUnits, maxSubdiv)` implements the printed
+tile export policy:
+
+```text
+export viewerShown first, otherwise loaded fold model
+```
+
+The caller provides tile height/detail settings from the export modal or the
+shared sim detail state.
+
 ## Adding a Service
 
 Add a service when logic is:
@@ -98,4 +118,3 @@ Add a service when logic is:
 - useful to test without instantiating the controller.
 
 Keep the controller call shape narrow: service in, outcome out.
-

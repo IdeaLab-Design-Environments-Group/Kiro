@@ -4,10 +4,18 @@ Foundation of the Kirigamizer app — a **TypeScript + Vite** project that keeps
 [AKDE](../AKDE)'s three-column UI and pairs a **model → kirigami converter**
 with the **FKLD viewer** as the central preview.
 
-This is the **layout** stage: the conversion is a passthrough stub. FKLD/FOLD
-files flow straight into the viewer; mesh files (`.obj`/`.stl`) are the entry
-point where the real pipeline (curvature → molecules/cuts → unfold → FKLD)
-will plug in.
+This started as the **layout** stage, but the repo now has several working
+generation paths:
+
+- the general mesh pipeline (`.obj`/ASCII `.stl` → condition → curvature/cuts →
+  unfold/pack → FKLD → sim verification);
+- AKDE pyramid creation;
+- 2.5D orthogonal cut-and-fold signage;
+- bistable star tiling surface programming;
+- a pattern editor and a circuit overlay/export path.
+
+FKLD/FOLD files still flow straight into the viewer; mesh files are routed
+through the selected creation method.
 
 ## Layout (mirrors AKDE)
 
@@ -49,6 +57,10 @@ will plug in.
     from `edges_foldAngle`, with quasi-static easing + velocity damping +
     rigid-body-motion removal + freeze (anti-jitter an unguided fold needs).
   The Three.js canvas is a lazy-loaded chunk.
+- **Circuit editor** (`src/model/circuit*`, `src/view/sim-modal.ts`,
+  `src/view/sim-canvas.ts`): in the 3D Sim, the Circuit tab lets users place
+  SMD parts on tiles, route traces through membrane gaps, save the circuit, and
+  export a separate circuit STL aligned to the flat tile print.
 
 ## Develop
 
@@ -78,6 +90,9 @@ npm run preview   # serve the production build
 | `docs/pipeline.md` | Mesh import, conditioning, curvature, and cut-planning pipeline contracts. |
 | `docs/testing.md` | Build/test checks and troubleshooting checklists. |
 | `docs/development.md` | Local commands, feature-placement rules, testing expectations, and generated-file notes. |
+| `docs/subsystems/cutfold25d.md` | 2.5D orthogonal cut-and-fold signage generator. |
+| `docs/subsystems/bst-pipeline.md` | Bistable star tiling pipeline and surface-fit route. |
+| `docs/subsystems/circuit-editor.md` | Circuit authoring, trace routing, and circuit STL export. |
 
 ## Files
 
@@ -91,18 +106,23 @@ npm run preview   # serve the production build
 | `src/model/derive-facts.ts` | loaded model → Derived rows presenter |
 | `src/model/fkld-metadata.ts` | FKLD/FOLD → metadata sections presenter |
 | `src/model/pattern-grid.ts` | pattern editor model: paintable lattice → triangulated FOLD draft (`gridToFold`) + presets |
-| `src/model/geometry.ts` · `src/model/types.ts` | kirigami geometry/domain calculations |
+| `src/model/circuit*.ts` | SMD part/trace model, circuit geometry resolver, and separate circuit STL export. |
+| `src/model/tile-subdiv.ts` | shared printed-tile inset/subdivision constants for sim and STL export. |
+| `kirigami/model/geometry.ts` · `kirigami/model/types.ts` | transferred AKDE kirigami geometry/domain calculations exposed through `@kirigami/model`. |
 | `src/view/` | DOM/WebGL views: convert panel, metadata panel, viewer frame, header actions, sim modal/canvas, pattern-editor modal |
 | `src/styles.css` | AKDE-derived theme (incl. 3D-sim modal) |
 | `src/pipeline/` | pure mesh-to-kirigami conversion stages and DTO contracts |
+| `src/pipeline/cutfold25d.ts` | 2.5D signage generator from pixel/text height maps. |
+| `src/pipeline/bst/` | bistable star tiling generation and surface-fit pipeline. |
 | `src/sim/` | simulation domain: bar-and-hinge fold engine + `fold-adapter`/`scene` builders |
 | `docs/` | architecture, simulation, and development notes |
 | `public/viewer/index.html` | FKLD viewer (copied from FKLD, + host bridge) |
 | `public/examples/` | bundled `.fkld` / `.fold` samples |
 | `*_algorithms.tex` · `*_algorithms.pdf` | Origamizer / Kirigamizer algorithm diagrams (reference) |
 
-## Next steps (not in this foundation)
+## Next steps
 
-- Implement `.obj`/`.stl` import and the Kirigamizer conversion in `src/`.
-- Replace the passthrough stub with curvature → molecule/cut → unfold.
-- Reuse FKLD's `bridge`/`io` and AKDE's geometry where useful.
+- Continue improving robustness of the general `.obj`/`.stl` mesh pipeline.
+- Expand the BST star-regime/bar population path beyond the current square-safe
+  defaults.
+- Keep new feature docs under `docs/subsystems/` when adding source areas.

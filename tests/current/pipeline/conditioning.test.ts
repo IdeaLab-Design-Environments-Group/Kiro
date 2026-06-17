@@ -58,10 +58,46 @@ describe("condition (composed)", () => {
   it("turns cube STL soup into a clean closed manifold", () => {
     const soup = parseMesh(toAsciiStl(makeCube()), "stl");
     const { mesh, reports } = condition(soup);
-    expect(reports.map((r) => r.pass)).toEqual(["weld", "degenerate", "orient"]);
+    expect(reports.map((r) => r.pass)).toEqual(["weld", "degenerate", "components", "orient"]);
     const topo = buildTopology(mesh);
     expect(eulerCharacteristic(mesh, topo)).toBe(2);
     expect(() => assertGenusZero(mesh, topo)).not.toThrow();
+  });
+});
+
+/** Two disjoint cubes → a single mesh with two connected components (χ = 4, 0 boundary loops).
+ *  The +300 shift keeps the 100-wide cubes well clear so welding can't fuse them into one shell. */
+function twoCubes(): TriMesh {
+  const a = makeCube();
+  const b = makeCube();
+  const offset = a.vertices.length;
+  return {
+    vertices: [...a.vertices, ...b.vertices.map((v) => ({ x: v.x + 300, y: v.y, z: v.z }))],
+    faces: [
+      ...a.faces,
+      ...b.faces.map(([i, j, k]) => [i + offset, j + offset, k + offset] as [number, number, number]),
+    ],
+  };
+}
+
+describe("keepLargestComponent / multi-shell conditioning", () => {
+  it("keeps one shell, records the drop, and the gate then passes", () => {
+    const { mesh, reports } = condition(twoCubes());
+    const comp = reports.find((r) => r.pass === "components")!;
+    expect(comp.changed).toBe(12); // the dropped cube's 12 faces
+    expect(comp.notes).toContain("kept largest of 2 components");
+    const topo = buildTopology(mesh);
+    expect(mesh.faces.length).toBe(12); // a single closed cube remains
+    expect(eulerCharacteristic(mesh, topo)).toBe(2);
+    expect(() => assertGenusZero(mesh, topo)).not.toThrow();
+  });
+
+  it("assertGenusZero flags a raw 2-shell mesh as disconnected, not as 'genus -1'", () => {
+    const two = twoCubes();
+    const topo = buildTopology(two);
+    expect(eulerCharacteristic(two, topo)).toBe(4); // two genus-0 shells → χ = 4
+    expect(() => assertGenusZero(two, topo)).toThrow("2 disconnected components");
+    expect(() => assertGenusZero(two, topo)).not.toThrow("genus -1");
   });
 });
 

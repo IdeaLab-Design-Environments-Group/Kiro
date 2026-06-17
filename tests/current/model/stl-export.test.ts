@@ -166,35 +166,12 @@ describe("buildStlExport — fold-adaptive triangulation", () => {
   });
 });
 
-describe("buildStlExport — hinge bridges (synthetic)", () => {
-  // two triangles share edge 0–2; assign it M → one bridge, no bridge on the boundary/cut edges
-  const base = {
-    vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
-    faces_vertices: [[0, 1, 2], [0, 2, 3]],
-    edges_vertices: [[0, 1], [1, 2], [0, 2], [2, 3], [0, 3]],
-  };
-  it("straps interior M/V/F edges and leaves cuts/boundaries open", () => {
-    const withHinge = buildStlExport({ ...base, edges_assignment: ["B", "B", "M", "B", "B"] } as any, "h", 1, 0)!;
-    const noHinge = buildStlExport({ ...base, edges_assignment: ["B", "B", "C", "B", "B"] } as any, "c", 1, 0)!;
-    // a bridge slab adds 12 facets over the two bare tiles
-    expect(countFacets(withHinge.text)).toBe(2 * FACETS_PER_TILE + 12);
-    expect(countFacets(noHinge.text)).toBe(2 * FACETS_PER_TILE); // cut edge → no bridge, stays open
-  });
-
-  it("places the bridge slab at the tile top (z between h·(1−frac) and h)", () => {
-    const out = buildStlExport({ ...base, edges_assignment: ["B", "B", "V", "B", "B"] } as any, "v", 2, 0)!;
-    const zs = new Set(verts(out.text).map((v) => v[2]));
-    expect(zs.has(2)).toBe(true); // tile + bridge top at h
-    expect([...zs].some((z) => z > 0 && z < 2)).toBe(true); // bridge slab underside above the base
-  });
-});
-
 describe("buildStlExport — real AKDE example", () => {
-  it("exports finite tiles + hinge bridges, flat-based, spanning z 0..h", () => {
+  it("exports finite separated tiles, flat-based, spanning z 0..h", () => {
     const fold = load("akde-hex.fkld");
     const out = buildStlExport(fold, "akde-hex", 5, 0)!;
-    // tiles (faces × 8) plus a strap on every interior M/V/F edge
-    expect(countFacets(out.text)).toBeGreaterThan(fold.faces_vertices!.length * FACETS_PER_TILE);
+    // separated tiles only — fold-adaptive subdivision means at least one tile per face
+    expect(countFacets(out.text)).toBeGreaterThanOrEqual(fold.faces_vertices!.length * FACETS_PER_TILE);
     const vs = verts(out.text);
     for (const v of vs) for (const k of v) expect(Number.isFinite(k)).toBe(true);
     const zs = vs.map((v) => v[2]);

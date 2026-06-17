@@ -9,6 +9,13 @@
 /** Each tile is shrunk this fraction toward its centroid (the bare-fabric hinge strips become gaps). */
 export const TILE_INSET_FRAC = 0.16;
 /**
+ * Adjustable gap range for the 3D Sim's "Gap" slider (printed tiles). The slider value is this same
+ * shrink-toward-centroid fraction; `TILE_INSET_FRAC` is its default so the un-touched look is unchanged.
+ * Clamped so tiles never vanish (too large) or fuse (too small) — both would break the kirigami gaps.
+ */
+export const MIN_TILE_GAP = 0.02;
+export const MAX_TILE_GAP = 0.45;
+/**
  * Detail "level" (the slider/menu value) → actual subdivision cap = level + DETAIL_OFFSET. So level 0
  * gives 1 subdivision deep, and the 0–4 slider spans caps 1–5. Shared by sim + export.
  */

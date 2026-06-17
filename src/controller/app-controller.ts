@@ -17,7 +17,6 @@ import {
   kirigamizeMesh,
   createAkdePyramid,
   create25dSign,
-  bstSurfaceProgram,
   fkldFromPatternGrid,
   serializePatternGrid,
 } from "../services/pattern-service.js";
@@ -27,7 +26,7 @@ import { resolveStlExport } from "../services/stl-export-service.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { MetadataPanel } from "../view/metadata-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
-import type { HeaderActions, KirigamizeMethod } from "../view/header-actions.js";
+import type { HeaderActions } from "../view/header-actions.js";
 import type { SimModal } from "../view/sim-modal.js";
 import type { ExportModal } from "../view/export-modal.js";
 import type { PatternEditorModal } from "../view/pattern-editor-modal.js";
@@ -59,6 +58,8 @@ export class AppController {
     // The sim's adaptive-detail slider is the shared source of truth: store it so the STL export
     // defaults to the same detail — "what you see is what you print".
     this.sim.onDetailChange((detail) => this.store.update({ simDetail: detail }));
+    // Likewise the sim's Gap slider: store it so the STL export uses the same inter-tile gap.
+    this.sim.onGapChange((gap) => this.store.update({ simTileGap: gap }));
     // ⌘/Ctrl+T in the sim saves the routed circuit ONTO the design: mirror it into state and attach
     // it to the loaded FKLD object (under `fkld:circuit`) so it travels with the design.
     this.sim.onSaveCircuit(() => {
@@ -83,8 +84,8 @@ export class AppController {
     // STL export of the separated, extruded 3D-printed tiles. Height from the menu; detail defaults to
     // the sim's shared `simDetail` (null = "use the sim's setting") so export and sim render match.
     this.exporter.setStlProvider((heightUnits, maxSubdiv) => {
-      const { model, viewerShown, simDetail } = this.store.getState();
-      return resolveStlExport(model, viewerShown, heightUnits, maxSubdiv ?? simDetail);
+      const { model, viewerShown, simDetail, simTileGap } = this.store.getState();
+      return resolveStlExport(model, viewerShown, heightUnits, maxSubdiv ?? simDetail, simTileGap);
     });
     // Circuit (traces + SMD parts) authored in the 3D Sim → its OWN STL, separate from the tiles.
     this.exporter.setCircuitProvider(() => {
@@ -103,7 +104,7 @@ export class AppController {
     this.header.onCreatePyramid(() => this.createPyramid());
     this.header.onCreate25d(() => this.create25d());
     this.header.onLoadSample(() => void this.loadSample());
-    this.header.onKirigamize((method) => this.kirigamize(method));
+    this.header.onKirigamize(() => this.kirigamize());
 
     // Secondary design path: the pattern editor commits a drawn grid as FKLD,
     // then shows it like any other pattern. The serializer feeds its download.
@@ -151,7 +152,7 @@ export class AppController {
    * seamed unfold → pack/classify → emit FKLD → fold in the sim and verify
    * d_H against the source mesh. FOLD/FKLD models pass through to the viewer.
    */
-  kirigamize(method: KirigamizeMethod = "normal"): void {
+  kirigamize(): void {
     const m = this.store.model;
     if (!m) return;
     if (m.kind === "fold") {
@@ -159,13 +160,9 @@ export class AppController {
       this.store.setStatus(`Showing "${m.name}" in the viewer (already a FOLD/FKLD pattern).`, "ok");
       return;
     }
-    const label =
-      method === "bst"
-        ? `Bistable star tiling of ${m.name}… (tile → project → relax onto surface)`
-        : `Kirigamizing ${m.name}… (plan cuts → unfold → emit → verify)`;
-    this.store.setStatus(label, "");
+    this.store.setStatus(`Kirigamizing ${m.name}… (plan cuts → unfold → emit → verify)`, "");
     try {
-      const outcome = method === "bst" ? bstSurfaceProgram(m.text, m.ext, m.name) : kirigamizeMesh(m.text, m.ext, m.name);
+      const outcome = kirigamizeMesh(m.text, m.ext, m.name);
       this.showPattern(outcome.fkld, outcome.name);
       this.store.setStatus(outcome.summary, outcome.ok ? "ok" : "bad");
     } catch (err) {

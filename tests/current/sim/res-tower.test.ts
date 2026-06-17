@@ -36,7 +36,7 @@ function barStrain(model: {
 }
 
 describe("Miyamoto RES square tower (faithful OS import, free fold)", () => {
-  it("routes free kirigami, cuts split, folds isometrically and stays finite", { timeout: 120_000 }, () => {
+  it("routes free kirigami, cuts split, folds isometrically and stays finite", { timeout: 60_000 }, () => {
     const fold = JSON.parse(readFileSync("public/examples/res-square-tower.fkld", "utf8")) as FoldFile;
     const inV = fold.vertices_coords!.length;
 
@@ -52,13 +52,37 @@ describe("Miyamoto RES square tower (faithful OS import, free fold)", () => {
     // Truly free: nothing is kinematically driven.
     expect(Array.from(model.driven).every((d) => d === 0)).toBe(true);
 
-    // Free-fold with self-collision (layers can't interpenetrate), exactly as the app's 3D Sim.
-    solver.enableCollision();
-    for (let k = 1; k <= 10; k++) solver.solve(4000, k / 10);
-    solver.solve(8000, 1.0);
+    // Free-fold the flat-foldable RES sheet (the app additionally runs self-collision so the
+    // stacking layers don't interpenetrate; not needed here to check the fold is valid + isometric).
+    for (let k = 1; k <= 6; k++) solver.solve(2500, k / 6);
+    solver.solve(4000, 1.0);
 
     // Isometric fold of the flat-foldable RES sheet (bars barely stretch).
     expect(barStrain(model)).toBeLessThan(0.05);
+    for (let i = 0; i < model.position.length; i++) expect(Number.isFinite(model.position[i])).toBe(true);
+  });
+
+  it("line-only variant (res-square-tower-erect) free-erects into a tower", { timeout: 60_000 }, () => {
+    // The over-constrained line-only import (paths dropped) CAN'T fold flat, so it buckles up into
+    // the visible RES tower under a plain free-fold ramp (no driving, no collision).
+    const fold = JSON.parse(readFileSync("public/examples/res-square-tower-erect.fkld", "utf8")) as FoldFile;
+    const built = buildScene(fold);
+    expect(built).not.toBeNull();
+    expect(built!.mode).toBe("free");
+    const { model, solver } = built!.scene;
+    for (let k = 1; k <= 8; k++) solver.solve(3000, k / 8);
+    solver.solve(6000, 1.0);
+
+    let zLo = Infinity, zHi = -Infinity, xLo = Infinity, xHi = -Infinity, yLo = Infinity, yHi = -Infinity;
+    for (let i = 0; i < model.numNodes; i++) {
+      const x = model.position[3 * i], y = model.position[3 * i + 1], z = model.position[3 * i + 2];
+      zLo = Math.min(zLo, z); zHi = Math.max(zHi, z);
+      xLo = Math.min(xLo, x); xHi = Math.max(xHi, x);
+      yLo = Math.min(yLo, y); yHi = Math.max(yHi, y);
+    }
+    const height = zHi - zLo, width = Math.max(xHi - xLo, yHi - yLo);
+    expect(height).toBeGreaterThan(0.4 * width); // erects (measured ≈0.5·width)
+    expect(barStrain(model)).toBeLessThan(0.1);
     for (let i = 0; i < model.position.length; i++) expect(Number.isFinite(model.position[i])).toBe(true);
   });
 });

@@ -11,7 +11,6 @@ pipeline.
 | `src/controller/app-controller.ts` | Calls the creation pipeline from `createPyramid`. |
 | `kirigami/model/geometry.ts` | `defaultInputs`, `computeState`. |
 | `kirigami/model/fkld-export.ts` | `buildFkldFile`. |
-| `src/model/geometry.ts` | Current app geometry mirror for active model docs/tests. |
 | `src/sim/scene.ts` | Recognizes generated pyramid FKLDs and selects guided sim. |
 
 ## Purpose
@@ -67,4 +66,3 @@ is a stable reference path.
 | Viewer shows pattern but 3D Sim disabled | `canSimulate` cannot recognize metadata. |
 | Guided sim folds wrong dimensions | `frame_title` parsing or units mismatch. |
 | Metadata panel lacks fields | FKLD export missing extension arrays. |
-

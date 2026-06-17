@@ -59,7 +59,7 @@ export interface MeshTopology {
 
 /** Audit record for one conditioning pass. */
 export interface ConditionReport {
-  pass: "weld" | "orient" | "degenerate" | "handle-cut";
+  pass: "weld" | "orient" | "degenerate" | "components" | "handle-cut";
   changed: number;
   notes?: string;
 }
