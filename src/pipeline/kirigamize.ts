@@ -17,6 +17,7 @@
  */
 
 import { condition, assertGenusZero } from "./conditioning.js";
+import { cutHandles } from "./handle-cut.js";
 import { angleDefects } from "./curvature.js";
 import { emitFkld } from "./emit.js";
 import { parseMesh } from "./import.js";
@@ -104,10 +105,13 @@ export interface KirigamizeResult {
 export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> = {}): KirigamizeResult {
   const opts = { ...DEFAULT_KIRIGAMIZE, ...options };
 
-  // Stage 0: condition + gates.
-  const { mesh, reports } = condition(input);
+  // Stage 0: condition → cut handles (genus>0 → genus 0) → genus gate.
+  const conditioned = condition(input);
+  const handle = cutHandles(conditioned.mesh); // no-op for a genus-0 surface
+  const mesh = handle.mesh;
+  const reports = [...conditioned.reports, handle.report];
   const topo = buildTopology(mesh);
-  assertGenusZero(mesh, topo);
+  assertGenusZero(mesh, topo); // now passes: any handles have been slit open
 
   // Stage 1: curvature.
   const defects = angleDefects(mesh, topo);

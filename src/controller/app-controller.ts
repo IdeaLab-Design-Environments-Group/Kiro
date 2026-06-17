@@ -13,14 +13,14 @@ import { summarizeFkldForDisplay } from "../model/fkld-metadata.js";
 import { canSimulate } from "../sim/index.js";
 import { statusFromError } from "../core/errors.js";
 import { loadedStatus, readModelFile, fetchSample } from "../services/model-loader.js";
-import { kirigamizeMesh, createAkdePyramid } from "../services/pattern-service.js";
+import { kirigamizeMesh, createAkdePyramid, bstSurfaceProgram } from "../services/pattern-service.js";
 import { resolveSimScene } from "../services/sim-scene-service.js";
 import { resolveSvgExport } from "../services/svg-export-service.js";
 import { resolveStlExport } from "../services/stl-export-service.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { MetadataPanel } from "../view/metadata-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
-import type { HeaderActions } from "../view/header-actions.js";
+import type { HeaderActions, KirigamizeMethod } from "../view/header-actions.js";
 import type { SimModal } from "../view/sim-modal.js";
 import type { ExportModal } from "../view/export-modal.js";
 
@@ -49,6 +49,21 @@ export class AppController {
     // The sim's adaptive-detail slider is the shared source of truth: store it so the STL export
     // defaults to the same detail — "what you see is what you print".
     this.sim.onDetailChange((detail) => this.store.update({ simDetail: detail }));
+    // ⌘/Ctrl+T in the sim saves the routed circuit ONTO the design: mirror it into state and attach
+    // it to the loaded FKLD object (under `fkld:circuit`) so it travels with the design.
+    this.sim.onSaveCircuit(() => {
+      const circuit = this.sim.getCircuit();
+      const { model, viewerShown } = this.store.getState();
+      const target = viewerShown?.object ?? (model?.kind === "fold" ? model.object : null);
+      if (target) (target as Record<string, unknown>)["fkld:circuit"] = circuit;
+      const n = circuit.components.length, t = circuit.traces.length;
+      this.store.update({
+        circuit,
+        status: n
+          ? { msg: `Saved ${n} part${n === 1 ? "" : "s"} + ${t} trace${t === 1 ? "" : "s"} onto the design.`, kind: "ok" }
+          : { msg: "No circuit to save yet — place parts and route traces in the 3D Sim first.", kind: "" },
+      });
+    });
 
     // SVG export targets the same source — "what you see is what you cut" (black=cut, blue=score).
     this.exporter.setProvider(() => {
@@ -77,7 +92,7 @@ export class AppController {
     this.convert.onFileChosen((file) => this.loadFromFile(file));
     this.header.onCreatePyramid(() => this.createPyramid());
     this.header.onLoadSample(() => void this.loadSample());
-    this.header.onKirigamize(() => this.kirigamize());
+    this.header.onKirigamize((method) => this.kirigamize(method));
 
     // Model changes → re-render every view (fires once immediately with state).
     this.store.subscribe((state) => this.render(state));
@@ -120,7 +135,7 @@ export class AppController {
    * seamed unfold → pack/classify → emit FKLD → fold in the sim and verify
    * d_H against the source mesh. FOLD/FKLD models pass through to the viewer.
    */
-  kirigamize(): void {
+  kirigamize(method: KirigamizeMethod = "normal"): void {
     const m = this.store.model;
     if (!m) return;
     if (m.kind === "fold") {
@@ -128,9 +143,13 @@ export class AppController {
       this.store.setStatus(`Showing "${m.name}" in the viewer (already a FOLD/FKLD pattern).`, "ok");
       return;
     }
-    this.store.setStatus(`Kirigamizing ${m.name}… (plan cuts → unfold → emit → verify)`, "");
+    const label =
+      method === "bst"
+        ? `Bistable star tiling of ${m.name}… (tile → project → relax onto surface)`
+        : `Kirigamizing ${m.name}… (plan cuts → unfold → emit → verify)`;
+    this.store.setStatus(label, "");
     try {
-      const outcome = kirigamizeMesh(m.text, m.ext, m.name);
+      const outcome = method === "bst" ? bstSurfaceProgram(m.text, m.ext, m.name) : kirigamizeMesh(m.text, m.ext, m.name);
       this.showPattern(outcome.fkld, outcome.name);
       this.store.setStatus(outcome.summary, outcome.ok ? "ok" : "bad");
     } catch (err) {

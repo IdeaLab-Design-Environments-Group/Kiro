@@ -6,10 +6,14 @@
  */
 import { el } from "./dom.js";
 
+/** Which kirigamization method the ▶ button runs. */
+export type KirigamizeMethod = "normal" | "bst";
+
 export class HeaderActions {
   readonly element: HTMLElement;
   private readonly createBtn: HTMLButtonElement;
   private readonly sampleBtn: HTMLButtonElement;
+  private readonly methodSelect: HTMLSelectElement;
   private readonly kirigamizeBtn: HTMLButtonElement;
 
   constructor() {
@@ -20,10 +24,26 @@ export class HeaderActions {
     this.sampleBtn = el("button", "sim-trigger") as HTMLButtonElement;
     this.sampleBtn.type = "button";
     this.sampleBtn.textContent = "Load sample";
+    // Method selector: "normal" (cut & fold, the M1–M5 pipeline) or "bst" (bistable star tiling).
+    this.methodSelect = el("select", "method-select") as HTMLSelectElement;
+    for (const [value, label] of [
+      ["normal", "Cut & fold"],
+      ["bst", "Bistable star tiling"],
+    ] as [KirigamizeMethod, string][]) {
+      const opt = el("option") as HTMLOptionElement;
+      opt.value = value;
+      opt.textContent = label;
+      this.methodSelect.appendChild(opt);
+    }
     this.kirigamizeBtn = el("button", "export-trigger") as HTMLButtonElement;
     this.kirigamizeBtn.type = "button";
     this.kirigamizeBtn.textContent = "Kirigamize ▶";
     this.kirigamizeBtn.disabled = true;
+  }
+
+  /** The currently selected kirigamization method. */
+  method(): KirigamizeMethod {
+    return this.methodSelect.value as KirigamizeMethod;
   }
 
   /**
@@ -32,7 +52,7 @@ export class HeaderActions {
    * [3D Sim] [Create pyramid] [Load sample] [Kirigamize ▶].
    */
   appendActionButtons(): void {
-    this.element.append(this.createBtn, this.sampleBtn, this.kirigamizeBtn);
+    this.element.append(this.createBtn, this.sampleBtn, this.methodSelect, this.kirigamizeBtn);
   }
 
   /** Generate an AKDE pyramid from the transferred creation pipeline. */
@@ -44,8 +64,8 @@ export class HeaderActions {
     this.sampleBtn.addEventListener("click", handler);
   }
 
-  onKirigamize(handler: () => void): void {
-    this.kirigamizeBtn.addEventListener("click", handler);
+  onKirigamize(handler: (method: KirigamizeMethod) => void): void {
+    this.kirigamizeBtn.addEventListener("click", () => handler(this.method()));
   }
 
   setKirigamizeEnabled(enabled: boolean): void {

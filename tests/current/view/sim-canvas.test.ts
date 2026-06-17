@@ -43,8 +43,20 @@ class MockPerspectiveCamera {
   }
 }
 
+class MockOrthographicCamera {
+  position = { set: vi.fn() };
+  up = { set: vi.fn() };
+  left = 0; right = 0; top = 0; bottom = 0; near = 0; far = 0;
+  lookAt = vi.fn();
+  updateProjectionMatrix = vi.fn();
+}
+
 class MockWebGLRenderer {
-  domElement = { remove: vi.fn() };
+  domElement = {
+    remove: vi.fn(),
+    addEventListener: vi.fn(),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+  };
   setSize = vi.fn();
   setPixelRatio = vi.fn();
   setClearColor = vi.fn();
@@ -99,6 +111,7 @@ class MockColor {
 vi.mock("three", () => ({
   Scene: MockScene,
   PerspectiveCamera: MockPerspectiveCamera,
+  OrthographicCamera: MockOrthographicCamera,
   WebGLRenderer: MockWebGLRenderer,
   Group: MockGroup,
   AmbientLight: MockLight,

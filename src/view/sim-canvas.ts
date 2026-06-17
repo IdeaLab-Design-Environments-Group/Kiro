@@ -2,9 +2,12 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
-import { type BaryTri, DEFAULT_MAX_SUBDIV, foldDepths, subdivBary, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
+import { type BaryTri, DEFAULT_MAX_SUBDIV, DETAIL_OFFSET, foldDepths, subdivBary, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import { type Circuit, type ComponentKind, EMPTY_CIRCUIT } from "../model/circuit.js";
-import { resolveCircuit } from "../model/circuit-geometry.js";
+import { type ComponentGeom, locateFlat, resolveCircuit, type TraceGeom, TRACE_W } from "../model/circuit-geometry.js";
+
+/** Active circuit-editor tool, KiCad-style: a cursor (select/move), the wire router, or a part to drop. */
+export type CircuitTool = "select" | "route" | ComponentKind;
 
 /**
  * Three.js viewport for the forward fold — renders the FoldNet as lit triangle faces plus
@@ -41,8 +44,31 @@ const COLOR_HINGE = 0xb08d57;
 /** Printed tile thickness as a fraction of the model's bbox diagonal (visual; physics is ratio-based). */
 const TILE_THICK_FRAC = 0.018;
 // `TILE_INSET_FRAC` (tile shrink toward centroid) is shared with the STL export via `tile-subdiv.ts`.
-/** Copper-trace overlay line (drawn on top so routing reads against the tiles). */
-const COPPER_LINE = new THREE.LineBasicMaterial({ color: 0xc87533, depthTest: false, transparent: true });
+/** Copper SMD pad material (shared; pads are all the same finish). */
+const PAD_MAT = new THREE.MeshStandardMaterial({ color: 0xc87533, metalness: 0.6, roughness: 0.35 });
+/** Live wire shown while dragging a trace from one pad toward another (drawn on top). */
+const ROUTE_PREVIEW_MAT = new THREE.LineBasicMaterial({ color: 0xffa030, depthTest: false, transparent: true });
+/** Pad grab radius in screen pixels² — how close the cursor must be to a pad to grab/snap it. */
+const PAD_PICK_PX2 = 22 * 22;
+/** Component grab radius in screen pixels² — for selecting/moving a part by its body centre. */
+const COMP_PICK_PX2 = 30 * 30;
+/** Highlight finish for the selected part's pads (KiCad-style selection). */
+const SELECT_MAT = new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0x7a5c00, emissiveIntensity: 0.5, metalness: 0.4, roughness: 0.4 });
+/** Translucent finish for the part attached to the cursor (place/move ghost). */
+const GHOST_MAT = new THREE.MeshStandardMaterial({ color: 0xffd23f, transparent: true, opacity: 0.55, depthTest: false, metalness: 0.3, roughness: 0.5 });
+/** Snap grid: this many cells across the flat pattern's larger dimension. */
+const GRID_CELLS = 28;
+const GRID_MAT = new THREE.LineBasicMaterial({ color: 0xcdd2d8, transparent: true, opacity: 0.6 });
+/**
+ * Copper trace ribbon — a full-width conductor laid FLAT on the fabric, sitting a hair above the cloth
+ * but BELOW the tile tops. Plain depth testing then makes the raised gray tiles occlude it wherever a
+ * tile is above, so it shows ONLY in the bare-cloth gaps it threads (never on the gray). No
+ * polygonOffset — the geometric lift already clears the fabric backing, and offset risked peeking over
+ * tile edges.
+ */
+const TRACE_MAT = new THREE.MeshStandardMaterial({
+  color: 0xc87533, metalness: 0.6, roughness: 0.35, side: THREE.DoubleSide,
+});
 
 const STEPS_PER_FRAME = 40;
 const GUIDED_STEPS_PER_FRAME = 80;
@@ -62,6 +88,13 @@ const MAX_SETTLE_FRAMES = 240;
 export class SimCanvas {
   private readonly scene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
+  /** Flat 2D camera for the circuit editor: orthographic top-down, no perspective depth. */
+  private readonly orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 5000);
+  private activeCamera!: THREE.Camera; // the camera currently rendered/picked with (persp or ortho)
+  private orthoRadius = 1;
+  private readonly ambient = new THREE.AmbientLight(0xffffff, 0.65);
+  private readonly keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  private readonly fillLight = new THREE.DirectionalLight(0xffffff, 0.35);
   private readonly renderer: THREE.WebGLRenderer;
   private readonly controls: OrbitControls;
   private readonly group = new THREE.Group();
@@ -103,12 +136,28 @@ export class SimCanvas {
   private readonly circuitGroup = new THREE.Group();
   private circuit: Circuit = EMPTY_CIRCUIT;
   private circuitMode = false;
-  private circuitTool: ComponentKind | null = null;
+  private tool: CircuitTool = "select"; // KiCad-style active tool
+  private selected: string | null = null; // selected component id (select tool)
   private circuitId = 0;
+  // KiCad cursor-attached place/move: the part rides the cursor and a CLICK drops it (no drag).
+  private held:
+    | { mode: "place"; kind: ComponentKind; rot: number }
+    | { mode: "move"; id: string; orig: { face: number; bary: [number, number, number] } }
+    | null = null;
+  private readonly ghostGroup = new THREE.Group();
+  // Snap grid (flat-pattern units), aligned to the model origin; shown only in the circuit editor.
+  private gridStep = 1;
+  private gridLines: THREE.LineSegments | null = null;
   private pickMesh: THREE.Mesh | null = null; // invisible folded faces; raycast target for placement
   private pickPos: Float32Array | null = null;
   private downPt: { x: number; y: number } | null = null;
   private circuitListener: ((c: Circuit) => void) | null = null;
+  private crossedEdges = new Set<string>(); // mesh edges any trace runs across → their hinge bridge is dropped
+  // KiCad-style routing: click a pad to start, rubber-band to the cursor, click a pad to finish.
+  private readonly routeGroup = new THREE.Group();
+  private routeStart: { comp: string; pad: number; world: [number, number, number] } | null = null;
+  private padCache: { comp: string; pad: number; world: [number, number, number] }[] = [];
+  private compCache: { id: string; world: [number, number, number] }[] = []; // component centres (select/move)
   private foldPercent = 0;
   // Open at the flat full sheet (0): the kirigamized body is first shown as the complete
   // paper with every cut line visible, then the user drives the fold slider up to the target.
@@ -141,22 +190,28 @@ export class SimCanvas {
     this.camera = new THREE.PerspectiveCamera(50, w / h, 0.5, 20000);
     this.camera.position.set(260, -260, 220);
     this.camera.up.set(0, 0, 1); // z-up to match the model's vertical apex axis
+    // Flat 2D camera for the circuit editor (orthographic, top-down → no perspective depth).
+    this.orthoCamera.up.set(0, 1, 0);
+    this.activeCamera = this.camera;
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
+    this.controls.zoomToCursor = true; // KiCad-style: wheel zooms toward the cursor
+    this.controls.screenSpacePanning = true;
 
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.65));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
-    keyLight.position.set(1, -1, 2);
-    this.scene.add(keyLight);
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.35);
-    fillLight.position.set(-1, 1, 0.5);
-    this.scene.add(fillLight);
+    this.scene.add(this.ambient);
+    this.keyLight.position.set(1, -1, 2);
+    this.scene.add(this.keyLight);
+    this.fillLight.position.set(-1, 1, 0.5);
+    this.scene.add(this.fillLight);
     this.scene.add(this.group);
     this.scene.add(this.circuitGroup);
+    this.scene.add(this.routeGroup);
+    this.scene.add(this.ghostGroup);
 
     const dom = this.renderer.domElement;
-    dom.addEventListener("pointerdown", (e) => { this.downPt = { x: e.clientX, y: e.clientY }; });
+    dom.addEventListener("pointerdown", (e) => this.onPointerDown(e));
+    dom.addEventListener("pointermove", (e) => this.onPointerMove(e));
     dom.addEventListener("pointerup", (e) => this.onPointerUp(e));
 
     this.loop = this.loop.bind(this);
@@ -260,10 +315,13 @@ export class SimCanvas {
     // Printed: thick rigid tiles drawn on top of the fabric backing, rebuilt each frame.
     if (this.material === "printed") this.buildPrintedTiles(net);
 
-    // Circuit overlay: invisible folded-faces pick mesh for placement, and a fresh (empty) circuit.
+    // Circuit overlay: invisible folded-faces pick mesh for placement, a snap grid, and a fresh circuit.
     this.buildPickMesh(net);
+    this.buildGrid(net);
     this.circuit = EMPTY_CIRCUIT;
     this.circuitId = 0;
+    this.held = null;
+    this.selected = null;
     this.circuitListener?.(this.circuit);
     this.updateCircuitOverlay();
 
@@ -339,6 +397,7 @@ export class SimCanvas {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    if (this.activeCamera === this.orthoCamera) this.applyOrthoFrustum();
   }
 
   private advance(): void {
@@ -360,13 +419,16 @@ export class SimCanvas {
         }
       }
     } else if (this.cpu) {
-      // Free (Neil's normal origami) fold: ease crease targets per step; rigid-removal kills the
-      // drift of an un-pinned mesh; the global quench settles it once at target.
+      // Free fold (self-supporting origami/kirigami, e.g. the Miyamoto RES tower): drive crease
+      // targets and let the OS-faithful under-damped dynamics settle — exactly as Origami Simulator
+      // does. NO kinetic quench here: zeroing velocity at the first equilibrium traps an
+      // underconstrained sheet flat before it can buckle UP into shape (the RES tower stalled at
+      // h/w≈0.2 with the quench vs ≈0.57 erected without it). Rigid-removal kills the un-pinned
+      // mesh's global drift; the per-frame motion-freeze settles it once it stops moving.
       for (let i = 0; i < STEPS_PER_FRAME; i++) {
         this.foldPercent += (this.targetFold - this.foldPercent) * FREE_PER_STEP_EASE;
         this.cpu.foldPercent = this.foldPercent;
         this.cpu.step();
-        if (this.foldPercent === this.targetFold) this.prevKE = kineticDamp(m, this.prevKE);
         removeRigidBodyMotion(m);
       }
       if (Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS) this.foldPercent = this.targetFold;
@@ -512,6 +574,12 @@ export class SimCanvas {
    * so we gate on the assignment too.)
    */
   private buildBridges(net: FoldNet): void {
+    if (this.bridgeMesh) { // idempotent: a circuit change rebuilds this layer to drop crossed bridges
+      this.group.remove(this.bridgeMesh);
+      this.bridgeGeo?.dispose();
+      (this.bridgeMesh.material as THREE.Material).dispose();
+      this.bridgeMesh = null;
+    }
     const assign = new Map<string, string>();
     for (const e of net.edges) {
       const k = e.a < e.b ? `${e.a}_${e.b}` : `${e.b}_${e.a}`;
@@ -533,6 +601,7 @@ export class SimCanvas {
       if (fs.length !== 2) continue; // boundary / split cut → keep open, no bridge
       const a = assign.get(key);
       if (a !== "M" && a !== "V" && a !== "F") continue; // only legal hinges (never C / B)
+      if (this.crossedEdges.has(key)) continue; // a trace runs across this hinge on bare cloth → no strap
       const u = key.indexOf("_");
       bridges.push([fs[0], fs[1], Number(key.slice(0, u)), Number(key.slice(u + 1))]);
     }
@@ -546,6 +615,7 @@ export class SimCanvas {
       color: COLOR_TILE, side: THREE.DoubleSide, flatShading: true, metalness: 0.0, roughness: 0.6,
     });
     this.bridgeMesh = new THREE.Mesh(this.bridgeGeo, mat);
+    this.bridgeMesh.visible = !this.circuitMode; // bridges are hidden while the circuit editor is open
     this.group.add(this.bridgeMesh);
   }
 
@@ -604,7 +674,7 @@ export class SimCanvas {
       if (f1 >= 0 && f1 < score.length) score[f1] = Math.max(score[f1], m);
       if (f2 >= 0 && f2 < score.length) score[f2] = Math.max(score[f2], m);
     }
-    return foldDepths(score, this.tileDetail);
+    return foldDepths(score, this.tileDetail + DETAIL_OFFSET); // level 0 → 1 subdivision (slider shift)
   }
 
   /** Set the fold-adaptive detail cap (shared with the export) and rebuild the printed tiles. */
@@ -676,14 +746,117 @@ export class SimCanvas {
 
   // --- Circuit overlay ------------------------------------------------------
 
-  /** Enter/exit circuit-placement mode (clicks on tiles drop the selected part). */
+  /** Enter/exit the circuit editor (flat 2D + tool interactions + snap grid). */
   setCircuitMode(on: boolean): void {
     this.circuitMode = on;
+    if (this.bridgeMesh) this.bridgeMesh.visible = !on; // no hinge straps while authoring the circuit
+    if (this.gridLines) this.gridLines.visible = on;
+    if (!on) { this.routeStart = null; this.routeGroup.clear(); this.held = null; this.ghostGroup.clear(); this.select(null); }
+    this.setCircuitTool("select"); // start on the select cursor; clears any held part + sets the cursor
+    this.setCircuit2D(on);
   }
 
-  /** Which SMD part the next click places (null = none). */
-  setCircuitTool(kind: ComponentKind | null): void {
-    this.circuitTool = kind;
+  /** Flat 2D circuit view: orthographic top-down camera + flat even lighting (no perspective, no shading). */
+  private setCircuit2D(on: boolean): void {
+    this.ambient.intensity = on ? 1.0 : 0.65; // flat even fill vs the 3D shaded key/fill
+    this.keyLight.visible = !on;
+    this.fillLight.visible = !on;
+    this.controls.enableRotate = !on; // 2D: pan + zoom only, locked top-down
+    if (on) {
+      const b = this.modelBounds();
+      this.orthoRadius = Math.max(b.rx, b.ry) * 1.12 || 1;
+      this.applyOrthoFrustum();
+      this.orthoCamera.position.set(b.cx, b.cy, b.zMax + this.orthoRadius * 4 + 1); // straight above
+      this.orthoCamera.near = 0.01;
+      this.orthoCamera.far = this.orthoRadius * 12 + (b.zMax - b.zMin) + 100;
+      this.orthoCamera.updateProjectionMatrix();
+      this.orthoCamera.lookAt(b.cx, b.cy, b.cz);
+      this.controls.target.set(b.cx, b.cy, b.cz);
+      this.activeCamera = this.orthoCamera;
+    } else {
+      this.activeCamera = this.camera;
+      this.controls.target.set(0, 0, (this.net?.meta.H ?? 0) * 0.2);
+    }
+    this.controls.object = this.activeCamera;
+    this.controls.update();
+  }
+
+  /** xy/z extents + centre of the current folded mesh — frames the 2D ortho camera. */
+  private modelBounds(): { cx: number; cy: number; cz: number; zMin: number; zMax: number; rx: number; ry: number } {
+    const p = this.fold?.model.position;
+    if (!p || p.length === 0) return { cx: 0, cy: 0, cz: 0, zMin: 0, zMax: 0, rx: 1, ry: 1 };
+    let xl = Infinity, xh = -Infinity, yl = Infinity, yh = -Infinity, zl = Infinity, zh = -Infinity;
+    for (let i = 0; i < p.length; i += 3) {
+      xl = Math.min(xl, p[i]); xh = Math.max(xh, p[i]);
+      yl = Math.min(yl, p[i + 1]); yh = Math.max(yh, p[i + 1]);
+      zl = Math.min(zl, p[i + 2]); zh = Math.max(zh, p[i + 2]);
+    }
+    return { cx: (xl + xh) / 2, cy: (yl + yh) / 2, cz: (zl + zh) / 2, zMin: zl, zMax: zh, rx: (xh - xl) / 2 || 1, ry: (yh - yl) / 2 || 1 };
+  }
+
+  private applyOrthoFrustum(): void {
+    const size = new THREE.Vector2();
+    this.renderer.getSize(size);
+    const aspect = (size.x || 1) / (size.y || 1);
+    const r = this.orthoRadius;
+    this.orthoCamera.left = -r * aspect; this.orthoCamera.right = r * aspect;
+    this.orthoCamera.top = r; this.orthoCamera.bottom = -r;
+    this.orthoCamera.updateProjectionMatrix();
+  }
+
+  /** Set the active editor tool. A part kind enters cursor-attached PLACE mode; select/route cancel it. */
+  setCircuitTool(tool: CircuitTool): void {
+    this.tool = tool;
+    this.routeStart = null;
+    this.routeGroup.clear();
+    this.held = isPartKind(tool) ? { mode: "place", kind: tool, rot: 0 } : null; // part rides the cursor
+    if (!this.held) this.ghostGroup.clear();
+    const style = (this.renderer.domElement as Partial<HTMLElement>).style;
+    if (style) style.cursor = this.circuitMode ? (tool === "select" && !this.held ? "default" : "crosshair") : "";
+  }
+
+  /** Esc: drop whatever's on the cursor (cancel place/move), else cancel a route, else deselect → Select. */
+  escapeTool(): void {
+    if (this.held) {
+      if (this.held.mode === "move") this.setComponentPos(this.held.id, this.held.orig.face, this.held.orig.bary, true);
+      this.setCircuitTool("select");
+      return;
+    }
+    if (this.routeStart) { this.routeStart = null; this.routeGroup.clear(); return; }
+    if (this.selected) { this.select(null); return; }
+    this.setCircuitTool("select");
+  }
+
+  /** Delete the selected part and any traces touching it (KiCad Del). */
+  deleteSelected(): void {
+    if (!this.selected) return;
+    const id = this.selected;
+    this.circuit = {
+      components: this.circuit.components.filter((c) => c.id !== id),
+      traces: this.circuit.traces.filter((t) => t.from.comp !== id && t.to.comp !== id),
+    };
+    this.select(null);
+    this.commitCircuit();
+  }
+
+  /** Rotate whatever is active 45° (the held place-ghost, the part being moved, or the selection). */
+  rotateSelected(): void {
+    if (this.held?.mode === "place") { this.held.rot += Math.PI / 4; return; }
+    const id = this.held?.mode === "move" ? this.held.id : this.selected;
+    if (!id) return;
+    this.circuit = {
+      ...this.circuit,
+      components: this.circuit.components.map((c) => (c.id === id ? { ...c, rot: c.rot + Math.PI / 4 } : c)),
+    };
+    this.commitCircuit();
+  }
+
+  /** M: pick the selected part up onto the cursor (KiCad click-move-click). */
+  moveSelected(): void {
+    if (this.held || !this.selected) return;
+    const c = this.circuit.components.find((x) => x.id === this.selected);
+    if (!c) return;
+    this.held = { mode: "move", id: c.id, orig: { face: c.face, bary: c.bary } };
   }
 
   /** Notified whenever the circuit changes (controller mirrors it into the store for export). */
@@ -702,12 +875,15 @@ export class SimCanvas {
   clearCircuit(): void {
     this.circuit = { components: [], traces: [] };
     this.circuitId = 0;
-    this.circuitListener?.(this.circuit);
-    this.updateCircuitOverlay();
+    this.select(null);
+    this.routeStart = null;
+    this.routeGroup.clear();
+    this.commitCircuit();
   }
 
   /** Invisible indexed mesh of the folded faces — raycast target that maps a hit straight to a face. */
   private buildPickMesh(net: FoldNet): void {
+    if (!net.vertices?.length || !net.faces?.length) return;
     this.pickPos = new Float32Array(net.vertices.length * 3);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(this.pickPos, 3));
@@ -724,62 +900,268 @@ export class SimCanvas {
     (this.pickMesh.geometry.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
   }
 
+  private onPointerDown(e: PointerEvent): void {
+    this.downPt = { x: e.clientX, y: e.clientY };
+    if (this.circuitMode) this.snapshotGeo(); // pad + component positions for cheap hit-testing this gesture
+  }
+
+  /** Move: the held part (place ghost / live move) rides the cursor; routing rubber-bands to the cursor. */
+  private onPointerMove(e: PointerEvent): void {
+    if (!this.circuitMode) return;
+    if (this.held) {
+      const at = this.snappedPlacement(e);
+      if (this.held.mode === "place") this.showGhost(this.held.kind, this.held.rot, at);
+      else if (at) this.setComponentPos(this.held.id, at.face, at.bary);
+      return;
+    }
+    if (this.tool === "route" && this.routeStart) {
+      const target = this.nearestPad(e.clientX, e.clientY);
+      const to = target && !samePad(target, this.routeStart) ? target.world : this.surfacePoint(e);
+      this.routeGroup.clear();
+      if (to) {
+        const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...this.routeStart.world), new THREE.Vector3(...to)]);
+        this.routeGroup.add(new THREE.Line(g, ROUTE_PREVIEW_MAT));
+      }
+    }
+  }
+
+  /** Click: drop the held part (place repeats / move ends), advance a route, or select — by active tool. */
   private onPointerUp(e: PointerEvent): void {
-    const down = this.downPt;
-    this.downPt = null;
-    if (!down || !this.circuitMode || !this.circuitTool || !this.pickMesh || !this.net || !this.fold) return;
-    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return; // a drag (orbit), not a click
+    const down = this.downPt; this.downPt = null;
+    if (!down || !this.circuitMode) return;
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return; // a drag (pan/zoom), not a click
+
+    if (this.held) {
+      const at = this.snappedPlacement(e);
+      if (this.held.mode === "place") {
+        if (at) this.placeComponent(at.face, at.bary, this.held.kind, this.held.rot); // drop; ghost continues
+      } else { // a move: commit where it now sits, back to the select tool
+        if (at) this.setComponentPos(this.held.id, at.face, at.bary);
+        this.commitCircuit();
+        this.setCircuitTool("select");
+      }
+      return;
+    }
+    if (this.tool === "route") {
+      const pad = this.nearestPad(e.clientX, e.clientY);
+      if (!pad) return;
+      if (!this.routeStart) this.routeStart = pad; // first click: start pad
+      else if (!samePad(pad, this.routeStart)) { this.addTrace(this.routeStart, pad); this.routeStart = null; this.routeGroup.clear(); }
+      return;
+    }
+    // Select tool: click a part to select it (M then picks it up to move).
+    this.select(this.nearestComp(e.clientX, e.clientY)?.id ?? null);
+  }
+
+  /** Raycast the folded faces at the pointer → { face, point }, or null. */
+  private pickFace(e: PointerEvent): { face: number; point: THREE.Vector3 } | null {
+    if (!this.pickMesh) return null;
+    const ray = this.rayAt(e);
+    const hit = ray.intersectObject(this.pickMesh, false)[0];
+    return hit && hit.faceIndex != null ? { face: hit.faceIndex, point: hit.point } : null;
+  }
+
+  /** Surface point under the pointer (on the folded mesh), or null when the ray misses. */
+  private surfacePoint(e: PointerEvent): [number, number, number] | null {
+    const hit = this.pickMesh ? this.rayAt(e).intersectObject(this.pickMesh, false)[0] : null;
+    return hit ? [hit.point.x, hit.point.y, hit.point.z] : null;
+  }
+
+  private rayAt(e: PointerEvent): THREE.Raycaster {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((e.clientX - rect.left) / rect.width) * 2 - 1,
       -((e.clientY - rect.top) / rect.height) * 2 + 1,
     );
     const ray = new THREE.Raycaster();
-    ray.setFromCamera(ndc, this.camera);
-    const hit = ray.intersectObject(this.pickMesh, false)[0];
-    if (!hit || hit.faceIndex == null) return;
-    this.placeComponent(hit.faceIndex, hit.point);
+    ray.setFromCamera(ndc, this.activeCamera);
+    return ray;
   }
 
-  /** Drop the selected part at a hit, snapped to the face by barycentric coords; chain a trace. */
-  private placeComponent(face: number, point: THREE.Vector3): void {
-    const p = this.fold!.model.position;
-    const f = this.net!.faces[face];
-    const bary = baryAt(point, p, f);
-    const id = `c${++this.circuitId}`;
-    const prev = this.circuit.components[this.circuit.components.length - 1];
-    const components = [...this.circuit.components, { id, kind: this.circuitTool!, face, bary, rot: 0 }];
-    const traces = [...this.circuit.traces];
-    if (prev) traces.push({ id: `t${this.circuitId}`, from: { comp: prev.id, pad: 1 }, to: { comp: id, pad: 0 } });
-    this.circuit = { components, traces };
-    this.circuitListener?.(this.circuit);
+  /** Snapshot pad + component world positions once per gesture so hit-testing on move/up stays cheap. */
+  private snapshotGeo(): void {
+    if (!this.net || !this.fold || this.circuit.components.length === 0) { this.padCache = []; this.compCache = []; return; }
+    const pos = this.fold.model.position;
+    const geo = resolveCircuit(this.circuit, this.net, (i) => [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]]);
+    this.padCache = geo.components.flatMap((c) => c.pads.map((world, pad) => ({ comp: c.id, pad, world })));
+    this.compCache = geo.components.map((c) => ({ id: c.id, world: c.center }));
+  }
+
+  /** The pad nearest the cursor within the grab radius (screen-space), or null. */
+  private nearestPad(cx: number, cy: number): { comp: string; pad: number; world: [number, number, number] } | null {
+    let best: { comp: string; pad: number; world: [number, number, number] } | null = null;
+    let bestD = PAD_PICK_PX2;
+    for (const e of this.padCache) {
+      const d = this.screenDist2(e.world, cx, cy);
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    return best;
+  }
+
+  /** The component centre nearest the cursor (screen-space), or null — for select/move. */
+  private nearestComp(cx: number, cy: number): { id: string; world: [number, number, number] } | null {
+    let best: { id: string; world: [number, number, number] } | null = null;
+    let bestD = COMP_PICK_PX2;
+    for (const e of this.compCache) {
+      const d = this.screenDist2(e.world, cx, cy);
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    return best;
+  }
+
+  private screenDist2(world: [number, number, number], cx: number, cy: number): number {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const v = new THREE.Vector3(world[0], world[1], world[2]).project(this.activeCamera);
+    const sx = (v.x * 0.5 + 0.5) * rect.width + rect.left;
+    const sy = (-v.y * 0.5 + 0.5) * rect.height + rect.top;
+    return (sx - cx) ** 2 + (sy - cy) ** 2;
+  }
+
+  private select(id: string | null): void {
+    if (this.selected === id) return;
+    this.selected = id;
     this.updateCircuitOverlay();
   }
 
-  /** Rebuild the circuit overlay (part boxes + trace lines) at the current fold. */
+  private addTrace(from: { comp: string; pad: number }, to: { comp: string; pad: number }): void {
+    this.circuit = {
+      ...this.circuit,
+      traces: [...this.circuit.traces, { id: `t${++this.circuitId}`, from: { ...from }, to: { ...to } }],
+    };
+    this.commitCircuit();
+  }
+
+  /** Drop a new part of `kind`/`rot` at a grid-snapped {face,bary}; the place tool stays active. */
+  private placeComponent(face: number, bary: [number, number, number], kind: ComponentKind, rot: number): void {
+    const id = `c${++this.circuitId}`;
+    this.circuit = { ...this.circuit, components: [...this.circuit.components, { id, kind, face, bary, rot }] };
+    this.commitCircuit();
+  }
+
+  /** Re-pin a part to {face,bary}. Live moves only redraw; `commit` does the full notify + bridge refresh. */
+  private setComponentPos(id: string, face: number, bary: [number, number, number], commit = false): void {
+    this.circuit = {
+      ...this.circuit,
+      components: this.circuit.components.map((c) => (c.id === id ? { ...c, face, bary } : c)),
+    };
+    if (commit) this.commitCircuit();
+    else this.updateCircuitOverlay();
+  }
+
+  /**
+   * Map the pointer to a grid-snapped {face, bary}: raycast the surface, convert to the FLAT pattern,
+   * snap to the grid, then re-locate the containing face. Fold-independent (snap happens in flat space).
+   */
+  private snappedPlacement(e: PointerEvent): { face: number; bary: [number, number, number] } | null {
+    const hit = this.pickFace(e);
+    if (!hit || !this.net || !this.fold) return null;
+    const f = this.net.faces[hit.face];
+    const b = baryAt(hit.point, this.fold.model.position, f);
+    const v = this.net.vertices;
+    const fx = b[0] * v[f[0]].x + b[1] * v[f[1]].x + b[2] * v[f[2]].x;
+    const fy = b[0] * v[f[0]].y + b[1] * v[f[1]].y + b[2] * v[f[2]].y;
+    const sx = Math.round(fx / this.gridStep) * this.gridStep, sy = Math.round(fy / this.gridStep) * this.gridStep;
+    return locateFlat(sx, sy, this.net);
+  }
+
+  /** Draw the translucent part attached to the cursor (place mode), or clear it when there's no target. */
+  private showGhost(kind: ComponentKind, rot: number, at: { face: number; bary: [number, number, number] } | null): void {
+    this.ghostGroup.clear();
+    if (!at || !this.net || !this.fold) return;
+    const pos = this.fold.model.position;
+    const geo = resolveCircuit(
+      { components: [{ id: "ghost", kind, face: at.face, bary: at.bary, rot }], traces: [] },
+      this.net, (i) => [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]],
+    );
+    const c = geo.components[0];
+    if (!c) return;
+    const mount = this.tileT || 0.02 * geo.scale, padH = 0.012 * geo.scale;
+    const basis = new THREE.Matrix4().makeBasis(new THREE.Vector3(...c.x), new THREE.Vector3(...c.y), new THREE.Vector3(...c.n));
+    for (const p of c.pads) {
+      const pad = box(c.padLen, c.padWid, padH, GHOST_MAT);
+      const m = basis.clone();
+      m.setPosition(p[0] + c.n[0] * mount, p[1] + c.n[1] * mount, p[2] + c.n[2] * mount);
+      pad.applyMatrix4(m);
+      this.ghostGroup.add(pad);
+    }
+  }
+
+  /** Build the snap grid (lines in the flat xy plane, sized to the pattern) — shown only in circuit mode. */
+  private buildGrid(net: FoldNet): void {
+    if (!net.vertices?.length) return;
+    let xl = Infinity, xh = -Infinity, yl = Infinity, yh = -Infinity;
+    for (const v of net.vertices) { xl = Math.min(xl, v.x); xh = Math.max(xh, v.x); yl = Math.min(yl, v.y); yh = Math.max(yh, v.y); }
+    this.gridStep = (Math.max(xh - xl, yh - yl) || 1) / GRID_CELLS;
+    const pts: number[] = [];
+    const x0 = Math.floor(xl / this.gridStep) * this.gridStep, x1 = Math.ceil(xh / this.gridStep) * this.gridStep;
+    const y0 = Math.floor(yl / this.gridStep) * this.gridStep, y1 = Math.ceil(yh / this.gridStep) * this.gridStep;
+    for (let x = x0; x <= x1 + 1e-6; x += this.gridStep) pts.push(x, y0, 0, x, y1, 0);
+    for (let y = y0; y <= y1 + 1e-6; y += this.gridStep) pts.push(x0, y, 0, x1, y, 0);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pts), 3));
+    this.gridLines = new THREE.LineSegments(g, GRID_MAT);
+    this.gridLines.visible = this.circuitMode;
+    this.group.add(this.gridLines);
+  }
+
+  /** Persist a circuit edit: notify, redraw the overlay, and refresh the trace-aware bridges. */
+  private commitCircuit(): void {
+    this.circuitListener?.(this.circuit);
+    this.updateCircuitOverlay();
+    this.refreshBridgesForCircuit();
+  }
+
+  /** Recompute which hinges traces cross and rebuild the bridge layer to drop those straps. */
+  private refreshBridgesForCircuit(): void {
+    if (!this.net) return;
+    const v = this.net.vertices;
+    const flat = (i: number): [number, number, number] => [v[i].x, v[i].y, v[i].z];
+    this.crossedEdges = new Set(resolveCircuit(this.circuit, this.net, flat).crossedEdges);
+    if (this.material === "printed") {
+      this.buildBridges(this.net); // idempotent rebuild honoring crossedEdges
+      this.updateBridges();
+    }
+  }
+
+  /**
+   * Rebuild the circuit overlay at the current fold: proper SMD footprints (copper pads + body + a
+   * kind-specific marker) mounted on the rigid tile tops, plus FULL-WIDTH copper trace ribbons that
+   * thread the bare-cloth gaps between the tiles. The ribbons are depth-tested, so the raised tiles
+   * occlude them — they read as conductors running on the fabric in the spaces between the triangles.
+   */
   private updateCircuitOverlay(): void {
     this.circuitGroup.clear();
     if (!this.net || !this.fold || this.circuit.components.length === 0) return;
     const pos = this.fold.model.position;
     const geo = resolveCircuit(this.circuit, this.net, (i) => [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]]);
-    const bodyH = 0.03 * geo.scale;
-    for (const c of geo.components) {
-      const box = new THREE.Mesh(
-        new THREE.BoxGeometry(c.len, c.wid, bodyH),
-        new THREE.MeshStandardMaterial({ color: c.color, metalness: 0.1, roughness: 0.6 }),
-      );
-      const m = new THREE.Matrix4().makeBasis(
-        new THREE.Vector3(...c.x), new THREE.Vector3(...c.y), new THREE.Vector3(...c.n),
-      );
-      m.setPosition(c.center[0] + c.n[0] * bodyH / 2, c.center[1] + c.n[1] * bodyH / 2, c.center[2] + c.n[2] * bodyH / 2);
-      box.applyMatrix4(m);
-      this.circuitGroup.add(box);
-    }
+    // Footprints mount on the tile's top face (one tile thickness off the cloth) so they're never
+    // buried; the traces drop off each pad down into the bare-cloth gaps.
+    const mount = this.tileT || 0.02 * geo.scale;
+    const padH = 0.012 * geo.scale;
+    for (const c of geo.components) this.addComponent(c, mount, padH, c.id === this.selected);
+    const halfW = (TRACE_W * geo.scale) / 2;
+    // Lay the WHOLE ribbon low (well below the tile tops at +mount): depth-tested, the raised gray
+    // tiles then occlude it everywhere a tile sits above, so it only ever shows in the bare-cloth
+    // gaps. A uniform low height (not lifted to the pads) keeps it off the gray near the pads too.
+    const lift = 0.15 * mount;
     for (const t of geo.traces) {
-      const lineGeo = new THREE.BufferGeometry().setFromPoints(
-        t.path.map((p) => new THREE.Vector3(p[0], p[1], p[2])),
-      );
-      this.circuitGroup.add(new THREE.Line(lineGeo, COPPER_LINE));
+      const ribbon = buildTraceRibbon(t, halfW, lift, lift);
+      if (ribbon) this.circuitGroup.add(new THREE.Mesh(ribbon, TRACE_MAT));
+    }
+  }
+
+  /** Add one SMD part as JUST its two copper pads (no body/marker), flat on the tile top; gold if selected. */
+  private addComponent(c: ComponentGeom, mount: number, padH: number, selected: boolean): void {
+    const basis = new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(...c.x), new THREE.Vector3(...c.y), new THREE.Vector3(...c.n),
+    );
+    const mat = selected ? SELECT_MAT : PAD_MAT;
+    for (const p of c.pads) {
+      const pad = box(c.padLen, c.padWid, selected ? padH * 1.4 : padH, mat);
+      const m = basis.clone();
+      m.setPosition(p[0] + c.n[0] * mount, p[1] + c.n[1] * mount, p[2] + c.n[2] * mount);
+      pad.applyMatrix4(m);
+      this.circuitGroup.add(pad);
     }
   }
 
@@ -808,7 +1190,7 @@ export class SimCanvas {
     if (!this.running) return;
     this.advance();
     this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    this.renderer.render(this.scene, this.activeCamera);
     requestAnimationFrame(this.loop);
   }
 
@@ -834,14 +1216,74 @@ export class SimCanvas {
     this.tileFaces = null;
     this.tileBary = null;
     this.circuitGroup.clear();
+    this.routeGroup.clear();
+    this.ghostGroup.clear();
+    this.gridLines = null; // group.clear() removed it from the scene graph
+    this.routeStart = null;
+    this.held = null;
+    this.selected = null;
+    this.padCache = [];
+    this.compCache = [];
     this.pickMesh = null;
     this.pickPos = null;
+    this.crossedEdges = new Set();
     this.cpu = null;
     this.faceMat = null;
     this.creaseLines = [];
     this.shellCapable = false;
     this.shellDisplayed = false;
   }
+}
+
+const samePad = (a: { comp: string; pad: number }, b: { comp: string; pad: number }): boolean =>
+  a.comp === b.comp && a.pad === b.pad;
+
+const isPartKind = (t: CircuitTool): t is ComponentKind => t !== "select" && t !== "route";
+
+/** An oriented box whose base sits at local z=0 (so `place(...)` stacks it on top of the surface). */
+function box(lx: number, ly: number, lz: number, mat: THREE.Material): THREE.Mesh {
+  const g = new THREE.BoxGeometry(lx, ly, lz);
+  g.translate(0, 0, lz / 2);
+  return new THREE.Mesh(g, mat);
+}
+
+/**
+ * Build a full-width copper ribbon along a routed trace: each path point is offset ±`halfW`
+ * perpendicular to the path within the local tangent plane (so the strip lies flat on the surface and
+ * rides the fold). Endpoints lift to the pad height (`endLift`); interior points hug the cloth
+ * (`midLift`), so the conductor ramps off the tile-top pads down into the gaps it threads.
+ */
+function buildTraceRibbon(t: TraceGeom, halfW: number, endLift: number, midLift: number): THREE.BufferGeometry | null {
+  const pts = t.path, nrm = t.normals, last = pts.length - 1;
+  if (last < 1) return null;
+  const L: THREE.Vector3[] = [], R: THREE.Vector3[] = [];
+  for (let i = 0; i <= last; i++) {
+    const p = new THREE.Vector3(pts[i][0], pts[i][1], pts[i][2]);
+    const n = new THREE.Vector3(nrm[i][0], nrm[i][1], nrm[i][2]);
+    if (n.lengthSq() < 1e-12) n.set(0, 0, 1); else n.normalize();
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(last, i + 1)];
+    const tan = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    if (tan.lengthSq() < 1e-14) tan.set(1, 0, 0);
+    const side = new THREE.Vector3().crossVectors(n, tan);
+    if (side.lengthSq() < 1e-14) { // tangent ∥ normal: any perpendicular will do
+      side.crossVectors(n, new THREE.Vector3(1, 0, 0));
+      if (side.lengthSq() < 1e-14) side.crossVectors(n, new THREE.Vector3(0, 1, 0));
+    }
+    side.normalize().multiplyScalar(halfW);
+    const base = p.addScaledVector(n, i === 0 || i === last ? endLift : midLift);
+    L.push(base.clone().add(side));
+    R.push(base.clone().sub(side));
+  }
+  const verts: number[] = [];
+  const push = (v: THREE.Vector3): void => { verts.push(v.x, v.y, v.z); };
+  for (let i = 0; i < last; i++) {
+    push(L[i]); push(R[i]); push(R[i + 1]);
+    push(L[i]); push(R[i + 1]); push(L[i + 1]);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  g.computeVertexNormals();
+  return g;
 }
 
 /** Barycentric coords of a world point within a folded face (node-index triple into `position`). */

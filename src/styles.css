@@ -359,6 +359,70 @@ body {
   margin-bottom: -1px;
 }
 
+.sim-palette {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  background: #fbfaf6;
+  border-bottom: 1px solid #e2e2e2;
+}
+
+.sim-palette[hidden] {
+  display: none;
+}
+
+.sim-palette-label {
+  font-size: 0.8rem;
+  color: #555;
+  font-weight: 600;
+}
+
+.sim-part {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #d6d0c2;
+  border-radius: 999px;
+  background: #fff;
+  color: #4a4534;
+  cursor: pointer;
+}
+
+.sim-part:hover {
+  border-color: #b08d57;
+}
+
+.sim-part.is-active {
+  background: #b08d57;
+  border-color: #b08d57;
+  color: #fff;
+  font-weight: 600;
+}
+
+.sim-part-clear {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #e0c4c4;
+  border-radius: 999px;
+  background: #fff;
+  color: #a23b3b;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.sim-part-clear:hover {
+  background: #fbeaea;
+}
+
+.sim-palette-hint {
+  flex-basis: 100%;
+  font-size: 0.72rem;
+  color: #8a8270;
+}
+
 .sim-canvas-mount {
   width: 100%;
   height: min(62vh, 560px);
@@ -459,6 +523,17 @@ body {
 .export-trigger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Kirigamize method selector (Cut & fold / Bistable star tiling), sits before the ▶ button. */
+.method-select {
+  font: inherit;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid #c7c7d1;
+  background: #fff;
+  color: #333;
+  border-radius: 4px;
+  cursor: pointer;
 }
 
 /* ---- Footer legend ---- */

@@ -114,6 +114,9 @@ describe("assertGenusZero", () => {
     const torus: TriMesh = { vertices, faces };
     const topo = buildTopology(torus);
     expect(eulerCharacteristic(torus, topo)).toBe(0);
-    expect(() => assertGenusZero(torus, topo)).toThrow(/genus 1/);
+    // v1 scope: closed genus-1 (χ=0, no boundary loops) is rejected with the exact diagnostic.
+    expect(() => assertGenusZero(torus, topo)).toThrow(
+      "genus 1 > 0 unsupported in v1 (χ=0, boundary loops=0) — handle-loop cutting is deferred",
+    );
   });
 });

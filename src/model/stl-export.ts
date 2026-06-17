@@ -10,7 +10,7 @@
  * Coordinates are the flat pattern `vertices_coords` (z = 0 base); n-gon faces are fan-triangulated.
  */
 import type { FoldFile } from "./fold-file.js";
-import { DEFAULT_MAX_SUBDIV, foldDepths, subdivBary, TILE_INSET_FRAC } from "./tile-subdiv.js";
+import { DEFAULT_MAX_SUBDIV, DETAIL_OFFSET, foldDepths, subdivBary, TILE_INSET_FRAC } from "./tile-subdiv.js";
 
 export interface StlExport {
   filename: string;
@@ -27,6 +27,9 @@ type V3 = [number, number, number];
 
 /** Default tile height as a fraction of the flat bbox diagonal (≈ the sim's visual `TILE_THICK_FRAC`). */
 const DEFAULT_HEIGHT_FRAC = 0.02;
+/** Hinge-bridge half-width along its edge (matches the sim's `W`), and slab thickness as a height fraction. */
+const BRIDGE_HALF_W = 0.16;
+const BRIDGE_T_FRAC = 0.35;
 
 /**
  * Build the ASCII-STL export of the separated, extruded, fold-adaptive tiles. `heightUnits` is the
@@ -67,6 +70,9 @@ export function buildStlExport(
       }
     }
   });
+  // Hinge bridges: a strap across every interior M/V/F edge tying the two tile tops together (cuts/
+  // boundary edges get none, so the kirigami still opens) — matches the sim's printed bridge layer.
+  emitBridges(out, fold, faces, vert, h);
   out.push(`endsolid ${baseName}`);
   return { filename: `${baseName}.stl`, text: out.join("\n") + "\n", height: h, unit, maxSubdiv: cap };
 }
@@ -81,14 +87,71 @@ function evalBary(w: [number, number, number], t: [V3, V3, V3]): V3 {
 }
 
 /** Per-face subdivision depth: more for harder-folding faces, normalised to the model's sharpest fold. */
-function faceDepths(fold: FoldFile, faces: number[][], cap: number): number[] {
+function faceDepths(fold: FoldFile, faces: number[][], level: number): number[] {
   const foldMag = edgeFoldMagnitudes(fold, faces);
   const score = faces.map((f) => {
     let s = 0;
     for (let k = 0; k < f.length; k++) s = Math.max(s, foldMag.get(edgeKey(f[k], f[(k + 1) % f.length])) ?? 0);
     return s;
   });
-  return foldDepths(score, cap);
+  return foldDepths(score, level + DETAIL_OFFSET); // level 0 → 1 subdivision (slider shift)
+}
+
+/**
+ * Emit a strap slab across every interior M/V/F edge (2 faces + a fold/facet assignment), inset
+ * toward each face centroid and sitting at the tile top — the printable twin of the sim's bridge
+ * layer. Cut ("C") and boundary ("B") edges get NO bridge so the kirigami still opens.
+ */
+function emitBridges(out: string[], fold: FoldFile, faces: number[][], vert: (i: number) => V3, hTop: number): void {
+  const ev = fold.edges_vertices, ea = fold.edges_assignment;
+  if (!Array.isArray(ev) || !Array.isArray(ea)) return;
+  const assign = new Map<string, string>();
+  for (let i = 0; i < ev.length; i++) assign.set(edgeKey(ev[i][0], ev[i][1]), ea[i]);
+
+  const edgeFaces = new Map<string, number[]>();
+  faces.forEach((f, fi) => {
+    for (let k = 0; k < f.length; k++) {
+      const key = edgeKey(f[k], f[(k + 1) % f.length]);
+      (edgeFaces.get(key) ?? edgeFaces.set(key, []).get(key)!).push(fi);
+    }
+  });
+
+  const tb = hTop * BRIDGE_T_FRAC;
+  for (const [key, fs] of edgeFaces) {
+    if (fs.length !== 2) continue; // boundary / split cut → stays open
+    const a = assign.get(key);
+    if (a !== "M" && a !== "V" && a !== "F") continue; // only legal hinges (never C / B)
+    const [s0, s1] = key.split(",").map(Number);
+    const e0 = vert(s0), e1 = vert(s1);
+    const lo = lerpXY(e0, e1, 0.5 - BRIDGE_HALF_W), hi = lerpXY(e0, e1, 0.5 + BRIDGE_HALF_W);
+    const c1 = centroid(faces[fs[0]], vert), c2 = centroid(faces[fs[1]], vert);
+    // quad loop: face1(lo→hi) then face2(hi→lo), all inset toward their own centroid
+    const q: [number, number][] = [insetXY(lo, c1), insetXY(hi, c1), insetXY(hi, c2), insetXY(lo, c2)];
+    writeSlab(out, q, hTop, hTop - tb);
+  }
+}
+
+/** A flat quad (4 xy corners) extruded between z = zBot..zTop → a closed, watertight slab. */
+function writeSlab(out: string[], q: [number, number][], zTop: number, zBot: number): void {
+  const t = q.map((p): V3 => [p[0], p[1], zTop]);
+  const b = q.map((p): V3 => [p[0], p[1], zBot]);
+  writeFacet(out, t[0], t[1], t[2]); writeFacet(out, t[0], t[2], t[3]); // top
+  writeFacet(out, b[0], b[2], b[1]); writeFacet(out, b[0], b[3], b[2]); // bottom (reversed)
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    writeFacet(out, b[i], b[j], t[j]); writeFacet(out, b[i], t[j], t[i]); // side wall
+  }
+}
+
+const lerpXY = (a: V3, b: V3, s: number): [number, number] => [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s];
+const insetXY = (p: [number, number], c: [number, number]): [number, number] => [
+  p[0] + (c[0] - p[0]) * TILE_INSET_FRAC,
+  p[1] + (c[1] - p[1]) * TILE_INSET_FRAC,
+];
+function centroid(face: number[], vert: (i: number) => V3): [number, number] {
+  let x = 0, y = 0;
+  for (const i of face) { const v = vert(i); x += v[0]; y += v[1]; }
+  return [x / face.length, y / face.length];
 }
 
 /** Map each undirected edge → fold magnitude (rad): crease targets when present, else folded dihedral. */

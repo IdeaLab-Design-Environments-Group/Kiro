@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   condition: vi.fn(),
   assertGenusZero: vi.fn(),
+  cutHandles: vi.fn(),
   angleDefects: vi.fn(),
   emitFkld: vi.fn(),
   parseMesh: vi.fn(),
@@ -16,6 +17,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../../src/pipeline/conditioning.js", () => ({
   condition: mocks.condition,
   assertGenusZero: mocks.assertGenusZero,
+}));
+
+vi.mock("../../../src/pipeline/handle-cut.js", () => ({
+  cutHandles: mocks.cutHandles,
 }));
 
 vi.mock("../../../src/pipeline/curvature.js", () => ({
@@ -149,6 +154,7 @@ describe("pipeline/kirigamize", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.condition.mockReturnValue({ mesh, reports: [{ pass: "weld", changed: 0 }] });
+    mocks.cutHandles.mockReturnValue({ mesh, report: { pass: "handle-cut", changed: 0 } });
     mocks.buildTopology.mockReturnValue(topo);
     mocks.angleDefects.mockReturnValue(defects);
     mocks.planCuts.mockReturnValue(makePlan(1));

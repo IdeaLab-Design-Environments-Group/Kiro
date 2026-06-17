@@ -64,11 +64,14 @@ export const DEFAULT_PARAMS: SolverParams = {
   kFold: 0.7,
   kFacet: 0.7,
   kFace: 0.2,
-  // Overdamped (paper uses ~0.45). The flat→cone fold is a buckling problem the explicit
-  // integrator can settle into cleaner or more-crumpled states; ζ≈1 reliably damps the chaotic
-  // buckling without the explicit-damping instability that appears past ζ≈1.5.
-  zeta: 1.0,
-  beamDampingScale: 1.0,
+  // Faithful to Origami Simulator: percentDamping ζ = 0.85, and beam viscous damping is the
+  // GPU-uploaded `beam.getD() * 0.5` (beamDampingScale = 0.5). Net beam damping = 0.85·√(k·m),
+  // i.e. UNDER-damped. The previous ζ=1.0 + scale=1.0 (≈2.3× OS) over-damped the explicit
+  // integrator so an underconstrained free fold settled in the nearest flat-ish equilibrium
+  // instead of dynamically buckling UP — the RES tower never erected. OS relies on this
+  // under-damped dynamics (off numerical asymmetry, no explicit perturbation) to rise.
+  zeta: 0.85,
+  beamDampingScale: 0.5,
   foldMountain: 1.2,
   foldValley: 2.9,
 };

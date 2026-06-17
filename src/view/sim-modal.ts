@@ -1,8 +1,8 @@
 import type { FoldScene, SimMaterial } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV } from "../model/tile-subdiv.js";
-import { COMPONENT_KINDS, COMPONENT_SPECS, type ComponentKind } from "../model/circuit.js";
+import { type Circuit, COMPONENT_KINDS, COMPONENT_SPECS, EMPTY_CIRCUIT } from "../model/circuit.js";
 import { buildCircuitStl, type CircuitStl } from "../model/circuit-export.js";
-import type { SimCanvas } from "./sim-canvas.js";
+import type { CircuitTool, SimCanvas } from "./sim-canvas.js";
 
 /** Returns a ready fold scene when the sim opens, or null when no model is loaded. */
 export type SimSceneProvider = () => { scene: FoldScene; title: string } | null;
@@ -32,9 +32,10 @@ export class SimModal {
   private material: SimMaterial = "vinyl";
   private detail = DEFAULT_MAX_SUBDIV;
   private circuitOn = false;
-  private tool: ComponentKind | null = null;
+  private tool: CircuitTool = "select";
   private materialListener: ((m: SimMaterial) => void) | null = null;
   private detailListener: ((d: number) => void) | null = null;
+  private saveCircuitListener: (() => void) | null = null;
 
   constructor() {
     this.trigger = document.createElement("button");
@@ -65,20 +66,23 @@ export class SimModal {
             <button type="button" class="sim-tab sim-circuit-tab" role="tab" aria-selected="false">Circuit</button>
           </div>
           <div class="sim-palette" hidden>
-            <span class="sim-palette-label">Add part:</span>
+            <span class="sim-palette-label">Tool</span>
+            <button type="button" class="sim-part" data-tool="select">Select</button>
+            <button type="button" class="sim-part" data-tool="route">Route</button>
+            <span class="sim-palette-label">Place</span>
             ${COMPONENT_KINDS.map(
-              (k) => `<button type="button" class="sim-part" data-part="${k}">${COMPONENT_SPECS[k].label}</button>`,
+              (k) => `<button type="button" class="sim-part" data-tool="${k}">${COMPONENT_SPECS[k].label}</button>`,
             ).join("")}
             <button type="button" class="sim-part-clear">Clear</button>
-            <span class="sim-palette-hint">Click a tile to place — parts auto-chain with traces.</span>
+            <span class="sim-palette-hint">Place: pick a part — it rides the cursor, click to drop (R rotates, Esc stops). Select then M moves, R rotates, Del deletes. Route: click pad → pad. Wheel zooms to cursor; snaps to grid.</span>
           </div>
           <div class="sim-canvas-mount"></div>
         </div>
         <footer class="sim-modal-footer">
           <span class="sim-status"></span>
-          <label class="sim-fold-control sim-detail-control" title="More tile subdivision on harder-folding faces (0 = uniform). Matches the STL export.">
-            Detail <span class="sim-detail-value">2</span>
-            <input type="range" class="sim-detail-slider" min="0" max="4" step="1" value="2" />
+          <label class="sim-fold-control sim-detail-control" title="More tile subdivision on harder-folding faces. Level 0 = 1 subdivision; 4 = 5. Matches the STL export.">
+            Detail <span class="sim-detail-value">0</span>
+            <input type="range" class="sim-detail-slider" min="0" max="4" step="1" value="0" />
           </label>
           <label class="sim-fold-control">
             Fold <span class="sim-fold-value">0%</span>
@@ -105,7 +109,7 @@ export class SimModal {
     }
     this.circuitTab.addEventListener("click", () => this.enterCircuit());
     for (const btn of this.partButtons) {
-      btn.addEventListener("click", () => this.selectPart(btn.dataset.part as ComponentKind));
+      btn.addEventListener("click", () => this.selectTool(btn.dataset.tool as CircuitTool));
     }
     this.overlay.querySelector(".sim-part-clear")!.addEventListener("click", () => this.canvas?.clearCircuit());
 
@@ -118,8 +122,29 @@ export class SimModal {
       if (e.target === this.overlay) this.close();
     });
     document.addEventListener("keydown", (e) => {
-      if (!this.overlay.hidden && e.key === "Escape") this.close();
+      if (this.overlay.hidden) return;
+      if ((e.metaKey || e.ctrlKey) && (e.key === "t" || e.key === "T")) {
+        e.preventDefault(); // save the routed circuit onto the design (overrides the browser new-tab)
+        this.saveCircuitListener?.();
+        return;
+      }
+      if (this.circuitOn && this.handleCircuitKey(e)) return; // KiCad-style hotkeys inside the editor
+      if (e.key === "Escape") this.close();
     });
+  }
+
+  /** KiCad-style editor hotkeys; returns true when the key was consumed. */
+  private handleCircuitKey(e: KeyboardEvent): boolean {
+    if (e.metaKey || e.ctrlKey || e.altKey) return false;
+    switch (e.key) {
+      case "Escape": this.canvas?.escapeTool(); return true; // cancel place/move/route, deselect (don't close)
+      case "Delete": case "Backspace": this.canvas?.deleteSelected(); return true;
+      case "m": case "M": this.canvas?.moveSelected(); return true; // pick the selected part up onto the cursor
+      case "r": case "R": this.canvas?.rotateSelected(); return true;
+      case "x": case "X": this.selectTool("route"); return true;
+      case "s": case "S": this.selectTool("select"); return true;
+      default: return false;
+    }
   }
 
   mountTrigger(container: HTMLElement): void {
@@ -173,24 +198,34 @@ export class SimModal {
     this.circuitTab.setAttribute("aria-selected", "true");
     this.palette.hidden = false;
     this.canvas?.setCircuitMode(true);
-    this.selectPart("led"); // a sensible default so the first click places something
+    this.selectTool("select"); // KiCad default: the selection/move cursor
   }
 
   private exitCircuit(): void {
     this.circuitOn = false;
-    this.tool = null;
+    this.tool = "select";
     this.circuitTab.classList.remove("is-active");
     this.circuitTab.setAttribute("aria-selected", "false");
     this.palette.hidden = true;
     for (const b of this.partButtons) b.classList.remove("is-active");
     this.canvas?.setCircuitMode(false);
-    this.canvas?.setCircuitTool(null);
   }
 
-  private selectPart(kind: ComponentKind): void {
-    this.tool = kind;
-    for (const b of this.partButtons) b.classList.toggle("is-active", b.dataset.part === kind);
-    this.canvas?.setCircuitTool(kind);
+  /** Pick the active editor tool (select / route / a part) and reflect it in the palette. */
+  private selectTool(tool: CircuitTool): void {
+    this.tool = tool;
+    for (const b of this.partButtons) b.classList.toggle("is-active", b.dataset.tool === tool);
+    this.canvas?.setCircuitTool(tool);
+  }
+
+  /** Notified on ⌘/Ctrl+T — the controller saves the current circuit onto the design. */
+  onSaveCircuit(cb: () => void): void {
+    this.saveCircuitListener = cb;
+  }
+
+  /** The circuit currently authored on the tiles (empty when no scene). */
+  getCircuit(): Circuit {
+    return this.canvas?.getCircuit() ?? EMPTY_CIRCUIT;
   }
 
   /** Build the separate circuit STL from the current placement (or null if empty / no scene). */

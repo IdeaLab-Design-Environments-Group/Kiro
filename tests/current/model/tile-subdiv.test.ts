@@ -46,7 +46,7 @@ describe("tile-subdiv: foldDepths", () => {
     expect(foldDepths([1, 0], 3)[0]).toBe(3);
   });
 
-  it("DEFAULT_MAX_SUBDIV is the shared default detail (2)", () => {
-    expect(DEFAULT_MAX_SUBDIV).toBe(2);
+  it("DEFAULT_MAX_SUBDIV is the shared default detail LEVEL (0 → 2 subdivisions via DETAIL_OFFSET)", () => {
+    expect(DEFAULT_MAX_SUBDIV).toBe(0);
   });
 });

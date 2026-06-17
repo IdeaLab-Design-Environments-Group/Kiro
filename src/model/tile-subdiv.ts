@@ -8,8 +8,13 @@
 
 /** Each tile is shrunk this fraction toward its centroid (the bare-fabric hinge strips become gaps). */
 export const TILE_INSET_FRAC = 0.16;
-/** Default cap on adaptive subdivision (the most-folded faces split into 4^this triangles). */
-export const DEFAULT_MAX_SUBDIV = 2;
+/**
+ * Detail "level" (the slider/menu value) → actual subdivision cap = level + DETAIL_OFFSET. So level 0
+ * gives 1 subdivision deep, and the 0–4 slider spans caps 1–5. Shared by sim + export.
+ */
+export const DETAIL_OFFSET = 1;
+/** Default detail LEVEL (the slider value). With the offset this is a cap of `DETAIL_OFFSET` (= 2). */
+export const DEFAULT_MAX_SUBDIV = 0;
 /** Below this peak fold angle (rad) the whole model reads as flat → no subdivision anywhere. */
 export const MIN_FOLD = 0.05;
 

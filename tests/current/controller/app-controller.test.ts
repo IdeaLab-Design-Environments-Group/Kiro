@@ -83,6 +83,8 @@ type SimProvider = () => { scene: unknown; title: string } | null;
 class SimModalMock {
   provider: SimProvider | null = null;
   enabledCalls: boolean[] = [];
+  materialListener: ((m: unknown) => void) | null = null;
+  detailListener: ((d: number) => void) | null = null;
 
   setProvider(provider: SimProvider): void {
     this.provider = provider;
@@ -91,16 +93,48 @@ class SimModalMock {
   setEnabled(enabled: boolean): void {
     this.enabledCalls.push(enabled);
   }
+
+  onMaterialChange(cb: (m: unknown) => void): void {
+    this.materialListener = cb;
+  }
+
+  onDetailChange(cb: (d: number) => void): void {
+    this.detailListener = cb;
+  }
+
+  onSaveCircuit(cb: () => void): void {
+    this.saveCircuitListener = cb;
+  }
+
+  saveCircuitListener: (() => void) | null = null;
+
+  getCircuit(): { components: unknown[]; traces: unknown[] } {
+    return { components: [], traces: [] };
+  }
+
+  getCircuitStl(): null {
+    return null;
+  }
 }
 
 type ExportProviderFn = () => unknown;
 
 class ExportModalMock {
   provider: ExportProviderFn | null = null;
+  stlProvider: ((h: number | null, d: number | null) => unknown) | null = null;
+  circuitProvider: (() => unknown) | null = null;
   enabledCalls: boolean[] = [];
 
   setProvider(provider: ExportProviderFn): void {
     this.provider = provider;
+  }
+
+  setStlProvider(provider: (h: number | null, d: number | null) => unknown): void {
+    this.stlProvider = provider;
+  }
+
+  setCircuitProvider(provider: () => unknown): void {
+    this.circuitProvider = provider;
   }
 
   setEnabled(enabled: boolean): void {

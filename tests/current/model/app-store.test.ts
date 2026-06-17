@@ -9,7 +9,8 @@ describe("model/app-store", () => {
       status: { msg: "No model loaded.", kind: "" },
       viewerShown: null,
       simMaterial: "vinyl",
-      simDetail: 2,
+      simDetail: 0,
+      circuit: { components: [], traces: [] },
     });
   });
 

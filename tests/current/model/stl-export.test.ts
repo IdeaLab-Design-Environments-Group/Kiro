@@ -130,16 +130,17 @@ describe("buildStlExport — fold-adaptive triangulation", () => {
 
   it("subdivides the folded face but not the flat one (more folding → more tiles)", () => {
     const tiles = (stl: string): number => countFacets(stl) / FACETS_PER_TILE;
-    expect(tiles(buildStlExport(fold, "f", 1, 0)!.text)).toBe(2); // detail 0 → uniform: 1 tile per face
-    // detail 2 → folded face splits to 4^2 = 16 tiles, flat face stays 1 → 17 tiles
-    expect(tiles(buildStlExport(fold, "f", 1, 2)!.text)).toBe(16 + 1);
-    expect(buildStlExport(fold, "f", 1, 2)!.maxSubdiv).toBe(2);
+    // level 0 → cap 1 (the +1 offset): folded face splits to 4^1 = 4 tiles, flat face stays 1 → 5
+    expect(tiles(buildStlExport(fold, "f", 1, 0)!.text)).toBe(4 + 1);
+    // level 2 → cap 3: folded face 4^3 = 64, flat face 1 → 65
+    expect(tiles(buildStlExport(fold, "f", 1, 2)!.text)).toBe(64 + 1);
+    expect(buildStlExport(fold, "f", 1, 2)!.maxSubdiv).toBe(2); // reported value is the LEVEL
   });
 
-  it("scales with the detail cap (deeper cap → more tiles on the folded face)", () => {
+  it("scales with the detail level (deeper level → more tiles on the folded face)", () => {
     const tiles = (d: number): number => countFacets(buildStlExport(fold, "f", 1, d)!.text) / FACETS_PER_TILE;
-    expect(tiles(1)).toBe(4 + 1); // folded face 4^1
-    expect(tiles(3)).toBe(64 + 1); // folded face 4^3
+    expect(tiles(1)).toBe(4 ** 2 + 1); // level 1 → cap 2
+    expect(tiles(3)).toBe(4 ** 4 + 1); // level 3 → cap 4
   });
 
   it("does not subdivide a flat model regardless of detail", () => {
@@ -165,23 +166,46 @@ describe("buildStlExport — fold-adaptive triangulation", () => {
   });
 });
 
-describe("buildStlExport — real AKDE example", () => {
-  it("exports a finite, watertight prism per face at uniform detail (detail 0)", () => {
-    const fold = load("akde-hex.fkld");
-    const out = buildStlExport(fold, "akde-hex", 5, 0)!;
-    expect(countFacets(out.text)).toBe(fold.faces_vertices!.length * FACETS_PER_TILE);
-    const vs = verts(out.text);
-    for (const v of vs) for (const k of v) expect(Number.isFinite(k)).toBe(true);
-    const zs = new Set(vs.map((v) => v[2]));
-    expect([...zs].sort((a, b) => a - b)).toEqual([0, 5]); // every tile based at 0, extruded to 5
+describe("buildStlExport — hinge bridges (synthetic)", () => {
+  // two triangles share edge 0–2; assign it M → one bridge, no bridge on the boundary/cut edges
+  const base = {
+    vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
+    faces_vertices: [[0, 1, 2], [0, 2, 3]],
+    edges_vertices: [[0, 1], [1, 2], [0, 2], [2, 3], [0, 3]],
+  };
+  it("straps interior M/V/F edges and leaves cuts/boundaries open", () => {
+    const withHinge = buildStlExport({ ...base, edges_assignment: ["B", "B", "M", "B", "B"] } as any, "h", 1, 0)!;
+    const noHinge = buildStlExport({ ...base, edges_assignment: ["B", "B", "C", "B", "B"] } as any, "c", 1, 0)!;
+    // a bridge slab adds 12 facets over the two bare tiles
+    expect(countFacets(withHinge.text)).toBe(2 * FACETS_PER_TILE + 12);
+    expect(countFacets(noHinge.text)).toBe(2 * FACETS_PER_TILE); // cut edge → no bridge, stays open
   });
 
-  it("adds tiles around the mountain folds at the default detail", () => {
+  it("places the bridge slab at the tile top (z between h·(1−frac) and h)", () => {
+    const out = buildStlExport({ ...base, edges_assignment: ["B", "B", "V", "B", "B"] } as any, "v", 2, 0)!;
+    const zs = new Set(verts(out.text).map((v) => v[2]));
+    expect(zs.has(2)).toBe(true); // tile + bridge top at h
+    expect([...zs].some((z) => z > 0 && z < 2)).toBe(true); // bridge slab underside above the base
+  });
+});
+
+describe("buildStlExport — real AKDE example", () => {
+  it("exports finite tiles + hinge bridges, flat-based, spanning z 0..h", () => {
     const fold = load("akde-hex.fkld");
-    const uniform = countFacets(buildStlExport(fold, "akde-hex", 5, 0)!.text);
-    const adaptive = buildStlExport(fold, "akde-hex", 5)!; // default detail = 2
-    expect(countFacets(adaptive.text)).toBeGreaterThan(uniform); // mountain-fold faces subdivided
-    const zs = new Set(verts(adaptive.text).map((v) => v[2]));
-    expect([...zs].sort((a, b) => a - b)).toEqual([0, 5]); // still flat-based prisms
+    const out = buildStlExport(fold, "akde-hex", 5, 0)!;
+    // tiles (faces × 8) plus a strap on every interior M/V/F edge
+    expect(countFacets(out.text)).toBeGreaterThan(fold.faces_vertices!.length * FACETS_PER_TILE);
+    const vs = verts(out.text);
+    for (const v of vs) for (const k of v) expect(Number.isFinite(k)).toBe(true);
+    const zs = vs.map((v) => v[2]);
+    expect(Math.min(...zs)).toBe(0); // based at 0
+    expect(Math.max(...zs)).toBe(5); // up to the chosen height
+  });
+
+  it("a higher detail level adds more tiles around the mountain folds", () => {
+    const fold = load("akde-hex.fkld");
+    const low = countFacets(buildStlExport(fold, "akde-hex", 5, 0)!.text); // level 0 → cap 2
+    const high = countFacets(buildStlExport(fold, "akde-hex", 5, 2)!.text); // level 2 → cap 4
+    expect(high).toBeGreaterThan(low); // mountain-fold faces subdivide further
   });
 });

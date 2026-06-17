@@ -59,6 +59,33 @@ const pyramid = (n, radius = 50, h = 70) => {
   return { v, f };
 };
 
+// Quarter-dome shell (octant of a flattened sphere) — the smooth target a 90°
+// pop-up's nested concentric arches approximate. A single apex vertex (positive
+// curvature) fans to latitude rings (→ the concentric arches when kirigamized);
+// open along the two vertical cut edges (u=0, u=90°) and the base arc. `zScale`
+// flattens it so the dome is wider than tall, matching the photographed piece.
+const quarterDome = (R = 70, zScale = 0.7, nu = 12, nv = 7) => {
+  const v = [[0, 0, R * zScale]]; // 0 = apex
+  const ring = [];
+  for (let i = 0; i <= nu; i++) {
+    ring[i] = [];
+    const u = (Math.PI / 2) * (i / nu); // azimuth 0 → 90°
+    for (let j = 1; j <= nv; j++) {
+      const phi = (Math.PI / 2) * (j / nv); // polar 0 (apex) → 90° (base)
+      ring[i][j] = v.length;
+      v.push([R * Math.sin(phi) * Math.cos(u), R * Math.sin(phi) * Math.sin(u), R * zScale * Math.cos(phi)]);
+    }
+  }
+  const f = [];
+  for (let i = 0; i < nu; i++) f.push([0, ring[i][1], ring[i + 1][1]]); // apex fan
+  for (let i = 0; i < nu; i++)
+    for (let j = 1; j < nv; j++) {
+      const a = ring[i][j], b = ring[i + 1][j], c = ring[i + 1][j + 1], d = ring[i][j + 1];
+      f.push([a, b, c], [a, c, d]);
+    }
+  return { v, f };
+};
+
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm = (a) => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
@@ -76,6 +103,17 @@ const orient = ({ v, f }) => {
   });
   return { v, f: out };
 };
+
+// Outward-orient an open shell whose curvature center is the origin (the dome):
+// flip any face whose normal points back toward the sphere center.
+const orientFromOrigin = ({ v, f }) => ({
+  v,
+  f: f.map(([i, j, k]) => {
+    const n = cross(sub(v[j], v[i]), sub(v[k], v[i]));
+    const fc = [(v[i][0] + v[j][0] + v[k][0]) / 3, (v[i][1] + v[j][1] + v[k][1]) / 3, (v[i][2] + v[j][2] + v[k][2]) / 3];
+    return dot(n, fc) >= 0 ? [i, j, k] : [i, k, j];
+  }),
+});
 
 function toStl(name, { v, f }) {
   const lines = [`solid ${name}`];
@@ -95,6 +133,7 @@ const samples = [
   ["sample-tetrahedron.stl", "tetrahedron", tetra(100)],
   ["sample-octahedron.stl", "octahedron", orient(octa(100))],
   ["sample-hex-pyramid.stl", "hexPyramid", orient(pyramid(6, 50, 70))],
+  ["dome-quarter.stl", "quarterDome", orientFromOrigin(quarterDome(70, 0.7, 8, 5))],
 ];
 const dist = (name) => fileURLToPath(new URL(`../dist/examples/${name}`, import.meta.url));
 for (const [file, name, mesh] of samples) {

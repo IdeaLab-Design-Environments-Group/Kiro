@@ -64,7 +64,7 @@ export class ExportModal {
             <input type="number" class="export-stl-height" min="0" step="0.1" />
             <span class="export-stl-unit">units</span>
           </label>
-          <label class="export-stl-height-label" title="More subdivision on harder-folding faces (0 = uniform)">Detail
+          <label class="export-stl-height-label" title="More subdivision on harder-folding faces. Level 0 = 1 subdivision; 4 = 5.">Detail
             <input type="number" class="export-stl-detail" min="0" max="4" step="1" />
           </label>
           <button type="button" class="export-stl-btn">Tiles (STL)</button>

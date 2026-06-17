@@ -8,8 +8,14 @@
  * app/UI state that the three panels and the action buttons read.
  */
 import type { FoldFile, LoadedModel } from "./fold-file.js";
-import type { SimMaterial } from "../sim/index.js";
+import { type Circuit, EMPTY_CIRCUIT } from "./circuit.js";
 import { DEFAULT_MAX_SUBDIV } from "./tile-subdiv.js";
+
+/**
+ * Mirrors `SimMaterial` from sim/index — inlined (structurally identical union) so the model layer
+ * never imports the sim layer (architecture rule R8). Stays in lock-step with the sim definition.
+ */
+export type SimMaterial = "vinyl" | "printed";
 
 export type StatusKind = "" | "ok" | "bad";
 
@@ -33,6 +39,8 @@ export interface AppState {
   simMaterial: SimMaterial;
   /** Fold-adaptive tile detail cap, shared by the 3D-printed sim render and the STL export. */
   simDetail: number;
+  /** The circuit (SMD parts + traces) saved onto the design via ⌘/Ctrl+T in the 3D Sim. */
+  circuit: Circuit;
 }
 
 export type StateListener = (state: Readonly<AppState>) => void;
@@ -44,6 +52,7 @@ export class AppStore {
     viewerShown: null,
     simMaterial: "vinyl",
     simDetail: DEFAULT_MAX_SUBDIV,
+    circuit: EMPTY_CIRCUIT,
   };
   private readonly listeners = new Set<StateListener>();
 
