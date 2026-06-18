@@ -14,7 +14,7 @@ render passed data, and emit callbacks.
 | `src/view/viewer-frame.ts` | `ViewerFrame` | iframe bridge and current viewer model. |
 | `src/view/pattern-editor-modal.ts` | `PatternEditorModal` | Interactive crease-grid editor, presets, use/download callbacks. |
 | `src/view/sim-modal.ts` | `SimModal` | Modal shell, fold slider, lazy canvas loading. |
-| `src/view/sim-canvas.ts` | `SimCanvas` | Three.js simulation scene rendering, printed-tile display, and circuit editor interactions. |
+| `src/view/sim-canvas.ts` | `SimCanvas` | Three.js simulation scene rendering and printed-tile display. |
 
 ## View Rules
 
@@ -104,8 +104,7 @@ Behavior:
 - lazy-loads `SimCanvas`;
 - rebuilds the scene on reset;
 - forwards fold slider value.
-- owns material/detail controls and the Circuit tab;
-- can export the saved circuit as a separate STL.
+- owns material/detail controls.
 
 ### SimCanvas
 
@@ -121,7 +120,6 @@ Behavior:
 - chooses GPU/CPU where appropriate;
 - renders faces and line overlays;
 - owns orbit controls and Three.js resources.
-- enters a flat orthographic authoring mode for circuit placement/routing.
 
 ## Testing
 

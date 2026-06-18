@@ -1,8 +1,7 @@
 # Subsystem: App State
 
 The app state subsystem stores only UI coordination state: the loaded object,
-status line, viewer source, sim/export material settings, and saved circuit
-overlay.
+status line, viewer source, and sim/export material settings.
 
 ## Files
 
@@ -23,7 +22,6 @@ interface AppState {
   simMaterial: "vinyl" | "printed";
   simDetail: number;
   simTileGap: number;
-  circuit: Circuit;
 }
 ```
 
@@ -43,9 +41,6 @@ contents drive downstream workflows.
 
 `simMaterial`, `simDetail`, and `simTileGap` mirror controls in the 3D Sim. STL
 export reads the same values so printed-tile downloads match the preview.
-
-`circuit` stores the SMD parts and traces saved from the 3D Sim circuit editor.
-The full simulation model is not stored here.
 
 ## Store Contract
 

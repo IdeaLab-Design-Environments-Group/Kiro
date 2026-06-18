@@ -55,10 +55,6 @@ resolveStlExport(model, viewerShown, heightUnits, maxSubdiv, inset)
   -> StlExport or null
 ```
 
-Circuit STL export is the documented exception: source naming follows the same
-viewer-first policy, but the geometry comes from the live circuit state in the
-3D Sim.
-
 ## Enablement
 
 In `AppController.render`:

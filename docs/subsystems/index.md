@@ -28,10 +28,9 @@ single working area: files, data flow, extension points, and failure modes.
 | Simulation | `../simulation.md` | Bar-and-hinge solver and guided/free simulation modes. |
 | CPU simulation | `simulation-cpu.md` | Reference solver, model arrays, stabilization, debugging. |
 | GPU simulation | `simulation-gpu.md` | Texture packing, shaders, readback, CPU parity. |
-| Circuit editor/export | `circuit-editor.md` | SMD parts, trace routing, app-state circuit save, and separate circuit STL export. |
 | FKLD validation | `fkld-validation.md` | Extension keys, validators, emission checks. |
 | SVG export | `svg-export.md` | Cut/score layer export, ZIP payloads, export modal. |
-| Export modal routing | `export-modal.md` | Shared SVG/STL/circuit download surface and provider lifecycle. |
+| Export modal routing | `export-modal.md` | Shared SVG/STL download surface and provider lifecycle. |
 | STL export | `stl-export.md` | Printed tile STL export, adaptive subdivision, sim/export parity. |
 | Pattern editor | `pattern-editor.md` | Paintable crease lattice, presets, and FKLD emission route. |
 | SVG import | `svg-import.md` | Origami Simulator SVG to FOLD/FKLD importer and RES Tower generator. |

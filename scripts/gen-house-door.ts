@@ -87,20 +87,26 @@ function emitAssembly(
   return { facets, tiles: faces.length, cuts: cuts / 2 | 0, folds: folds / 2 | 0, boundary, nonManifoldEdges: nonManifold, volume: vol6 / 6 };
 }
 
-for (const name of ["house", "house-door", "barn", "windmill"] as const) {
-  const mesh = parseMesh(readFileSync(resolve(root, `public/examples/${name}.stl`), "utf8"), "stl");
-  const fkld = kirigamize(mesh).fkld as Record<string, unknown>;
-  writeFileSync(resolve(root, "public/examples", `${name}.fkld`), JSON.stringify(fkld));
-  const flatCoords = (fkld.vertices_coords as number[][]).map((c): V3 => [c[0], c[1], c[2] ?? 0]);
-  const foldedCoords = ((fkld.file_frames as Record<string, unknown>[])[0].vertices_coords as number[][]).map((c): V3 => [c[0], c[1], c[2] ?? 0]);
+for (const name of ["house", "house-door", "barn", "hotel", "general-store", "saloon", "church", "corner-saloon"] as const) {
+  try {
+    const mesh = parseMesh(readFileSync(resolve(root, `public/examples/${name}.stl`), "utf8"), "stl");
+    const fkld = kirigamize(mesh).fkld as Record<string, unknown>;
+    writeFileSync(resolve(root, "public/examples", `${name}.fkld`), JSON.stringify(fkld));
+    const flatCoords = (fkld.vertices_coords as number[][]).map((c): V3 => [c[0], c[1], c[2] ?? 0]);
+    const foldedCoords = ((fkld.file_frames as Record<string, unknown>[])[0].vertices_coords as number[][]).map((c): V3 => [c[0], c[1], c[2] ?? 0]);
 
-  const flat = emitAssembly(fkld, flatCoords, FLAT_SIZE, "flat", `${name}-kirigami-flat`);
-  const folded = emitAssembly(fkld, foldedCoords, FOLDED_SIZE, "folded", `${name}-kirigami`);
-  for (const [lbl, r, size] of [["flat  ", flat, FLAT_SIZE], ["folded", folded, FOLDED_SIZE]] as const) {
-    console.log(
-      `${name} ${lbl}: tiles=${r.tiles} folds(merge)=${r.folds} cut-seams=${r.cuts} boundary=${r.boundary} ` +
-      `facets=${r.facets} non-manifold-edges=${r.nonManifoldEdges} vol=${r.volume.toFixed(0)}mm³  (${size}mm)`,
-    );
+    const flat = emitAssembly(fkld, flatCoords, FLAT_SIZE, "flat", `${name}-kirigami-flat`);
+    const folded = emitAssembly(fkld, foldedCoords, FOLDED_SIZE, "folded", `${name}-kirigami`);
+    for (const [lbl, r, size] of [["flat  ", flat, FLAT_SIZE], ["folded", folded, FOLDED_SIZE]] as const) {
+      console.log(
+        `${name} ${lbl}: tiles=${r.tiles} folds(merge)=${r.folds} cut-seams=${r.cuts} boundary=${r.boundary} ` +
+        `facets=${r.facets} non-manifold-edges=${r.nonManifoldEdges} vol=${r.volume.toFixed(0)}mm³  (${size}mm)`,
+      );
+    }
+  } catch (e) {
+    // A building that is not a developable foldable surface (e.g. a church with a roof-top cupola/spire)
+    // can't kirigamize — skip it (it stays a display .stl) rather than crashing the whole town build.
+    console.warn(`SKIP ${name}: cannot kirigamize — ${(e as Error).message.split("\n")[0]}`);
   }
 }
 console.log("wrote house/house-door kirigami flat + folded STLs + .fkld to public/examples/");

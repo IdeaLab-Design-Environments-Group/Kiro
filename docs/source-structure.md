@@ -24,9 +24,6 @@ src/
     svg-export-service.ts
   model/
     app-store.ts
-    circuit.ts
-    circuit-export.ts
-    circuit-geometry.ts
     derive-facts.ts
     fkld-metadata.ts
     fkld-svg-export.ts
@@ -148,9 +145,6 @@ Rules:
 | File | Responsibility |
 | --- | --- |
 | `app-store.ts` | Observable UI state: loaded model, status, and `viewerShown` (what the viewer iframe displays). |
-| `circuit.ts` | SMD component/trace data model and fab.pretty-inspired two-terminal footprint specs. |
-| `circuit-geometry.ts` | Resolves circuit parts, pads, traces, crossed edges, and folded/flat positions. |
-| `circuit-export.ts` | Builds the separate flat circuit STL for traces, pads, and component bodies. |
 | `fold-file.ts` | Minimal FOLD/FKLD types and `isFkld`. |
 | `derive-facts.ts` | Loaded model to Derived panel rows. |
 | `fkld-metadata.ts` | FOLD/FKLD object to metadata panel sections. |
@@ -182,11 +176,11 @@ Rules:
 | `convert-panel.ts` | File dropzone, status line, Derived rows. |
 | `metadata-panel.ts` | FKLD metadata rendering. |
 | `viewer-frame.ts` | Embedded FKLD viewer iframe and postMessage bridge. |
-| `export-modal.ts` | Export modal for SVG cut/score, printed tile STL, and circuit STL downloads. |
+| `export-modal.ts` | Export modal for SVG cut/score and printed tile STL downloads. |
 | `pattern-editor-modal.ts` | Interactive crease-pattern grid editor (secondary design path): tool palette, presets, paints a `PatternGrid`, emits `onUse(grid)` + a download serializer. |
 | `header-actions.ts` | Header buttons and intent callbacks. |
 | `sim-modal.ts` | 3D simulation modal shell and fold slider. |
-| `sim-canvas.ts` | Three.js/WebGL simulation rendering, printed-tile display, circuit editor, and animation policy. |
+| `sim-canvas.ts` | Three.js/WebGL simulation rendering, printed-tile display, and animation policy. |
 
 Rules:
 

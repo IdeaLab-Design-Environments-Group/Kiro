@@ -12,7 +12,7 @@ generation paths:
 - AKDE pyramid creation;
 - 2.5D orthogonal cut-and-fold signage;
 - bistable star tiling surface programming;
-- a pattern editor and a circuit overlay/export path.
+- a pattern editor.
 
 FKLD/FOLD files still flow straight into the viewer; mesh files are routed
 through the selected creation method.
@@ -57,10 +57,6 @@ through the selected creation method.
     from `edges_foldAngle`, with quasi-static easing + velocity damping +
     rigid-body-motion removal + freeze (anti-jitter an unguided fold needs).
   The Three.js canvas is a lazy-loaded chunk.
-- **Circuit editor** (`src/model/circuit*`, `src/view/sim-modal.ts`,
-  `src/view/sim-canvas.ts`): in the 3D Sim, the Circuit tab lets users place
-  SMD parts on tiles, route traces through membrane gaps, save the circuit, and
-  export a separate circuit STL aligned to the flat tile print.
 
 ## Develop
 
@@ -92,8 +88,7 @@ npm run preview   # serve the production build
 | `docs/development.md` | Local commands, feature-placement rules, testing expectations, and generated-file notes. |
 | `docs/subsystems/cutfold25d.md` | 2.5D orthogonal cut-and-fold signage generator. |
 | `docs/subsystems/bst-pipeline.md` | Bistable star tiling pipeline and surface-fit route. |
-| `docs/subsystems/circuit-editor.md` | Circuit authoring, trace routing, and circuit STL export. |
-| `docs/subsystems/export-modal.md` | Export modal provider lifecycle for SVG, tile STL, and circuit STL downloads. |
+| `docs/subsystems/export-modal.md` | Export modal provider lifecycle for SVG and tile STL downloads. |
 | `docs/subsystems/stl-export.md` | Printed tile STL export and adaptive subdivision. |
 | `docs/subsystems/pattern-editor.md` | Paintable crease-grid editor and FKLD emission route. |
 | `docs/subsystems/svg-import.md` | Origami Simulator SVG importer and RES Tower generator. |
@@ -112,7 +107,6 @@ npm run preview   # serve the production build
 | `src/model/derive-facts.ts` | loaded model → Derived rows presenter |
 | `src/model/fkld-metadata.ts` | FKLD/FOLD → metadata sections presenter |
 | `src/model/pattern-grid.ts` | pattern editor model: paintable lattice → triangulated FOLD draft (`gridToFold`) + presets |
-| `src/model/circuit*.ts` | SMD part/trace model, circuit geometry resolver, and separate circuit STL export. |
 | `src/model/tile-subdiv.ts` | shared printed-tile inset/subdivision constants for sim and STL export. |
 | `kirigami/model/geometry.ts` · `kirigami/model/types.ts` | transferred AKDE kirigami geometry/domain calculations exposed through `@kirigami/model`. |
 | `src/view/` | DOM/WebGL views: convert panel, metadata panel, viewer frame, header actions, sim modal/canvas, pattern-editor modal |
