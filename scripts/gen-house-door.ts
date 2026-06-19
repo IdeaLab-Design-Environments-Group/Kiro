@@ -90,7 +90,7 @@ function emitAssembly(
 for (const name of ["house", "house-door", "barn", "hotel", "general-store", "saloon", "church", "corner-saloon"] as const) {
   try {
     const mesh = parseMesh(readFileSync(resolve(root, `public/examples/${name}.stl`), "utf8"), "stl");
-    const fkld = kirigamize(mesh).fkld as Record<string, unknown>;
+    const fkld = kirigamize(mesh, { lambda: name === "corner-saloon" ? 2 : 0 }).fkld as Record<string, unknown>;
     writeFileSync(resolve(root, "public/examples", `${name}.fkld`), JSON.stringify(fkld));
     const flatCoords = (fkld.vertices_coords as number[][]).map((c): V3 => [c[0], c[1], c[2] ?? 0]);
     const foldedCoords = ((fkld.file_frames as Record<string, unknown>[])[0].vertices_coords as number[][]).map((c): V3 => [c[0], c[1], c[2] ?? 0]);
