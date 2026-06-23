@@ -17,7 +17,6 @@ import {
   type FlatFace,
   type GapEdge,
   type RoutedCircuit,
-  TAPE_W,
   type TilePoly,
   type Vec2,
   flatFaces,
@@ -53,6 +52,12 @@ export class ElectronicsModal {
   private bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   private circuit: Circuit = { leds: [], battery: null };
   private routed: RoutedCircuit | null = null;
+  private showRoutes = false; // copper tape is drawn only after the user hits "Auto-route"
+
+  // Pan/zoom: `content` is the full pattern box (mm + margin); `view` is the visible window into it.
+  private content = { w: 1, h: 1 };
+  private view = { x: 0, y: 0, w: 1, h: 1 };
+  private pan: { x: number; y: number; moved: number } | null = null;
 
   private editHandler: (circuit: Circuit) => void = () => {};
 
@@ -81,7 +86,15 @@ export class ElectronicsModal {
               <button type="button" class="el-tool" data-tool="battery" title="Battery (click a tile)">Battery</button>
             </span>
             <span class="el-group">
+              <span class="el-label">Routing</span>
+              <button type="button" class="el-route" title="Auto-route copper tape from the battery to every LED">Auto-route</button>
               <button type="button" class="el-clear">Clear</button>
+            </span>
+            <span class="el-group el-view-group">
+              <span class="el-label">View</span>
+              <button type="button" class="el-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
+              <button type="button" class="el-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+              <button type="button" class="el-fit" title="Fit to screen">Fit</button>
             </span>
           </div>
           <div class="el-canvas-wrap">
@@ -97,7 +110,7 @@ export class ElectronicsModal {
         </div>
         <footer class="sim-modal-footer">
           <span class="sim-status el-status"></span>
-          <span class="el-hint">Export the copper layer from <strong>Export SVG</strong>.</span>
+          <span class="el-hint">Scroll to zoom · drag to pan · <strong>Auto-route</strong> to wire · export from <strong>Export SVG</strong>.</span>
         </footer>
       </div>
     `;
@@ -111,12 +124,21 @@ export class ElectronicsModal {
       btn.addEventListener("click", () => this.selectTool(tool));
       this.toolButtons.set(tool, btn);
     }
+    this.overlay.querySelector(".el-route")!.addEventListener("click", () => this.autoRoute());
     this.overlay.querySelector(".el-clear")!.addEventListener("click", () => this.clear());
+    this.overlay.querySelector(".el-zoom-in")!.addEventListener("click", () => this.zoomBy(1.25));
+    this.overlay.querySelector(".el-zoom-out")!.addEventListener("click", () => this.zoomBy(0.8));
+    this.overlay.querySelector(".el-fit")!.addEventListener("click", () => this.fitView());
     this.overlay.querySelector(".sim-modal-close")!.addEventListener("click", () => this.close());
     this.overlay.addEventListener("click", (e) => {
       if (e.target === this.overlay) this.close();
     });
-    this.svg.addEventListener("click", (e) => this.onCanvasClick(e));
+    // Pointer = pan (drag) or place (tap). Wheel = zoom toward the cursor.
+    this.svg.addEventListener("pointerdown", (e) => this.onPointerDown(e));
+    this.svg.addEventListener("pointermove", (e) => this.onPointerMove(e));
+    this.svg.addEventListener("pointerup", (e) => this.onPointerUp(e));
+    this.svg.addEventListener("pointercancel", () => (this.pan = null));
+    this.svg.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     document.addEventListener("keydown", (e) => {
       if (this.overlay.hidden) return;
       if (e.key === "Escape") this.close();
@@ -148,7 +170,10 @@ export class ElectronicsModal {
     this.points = fold ? flatPoints(fold) : [];
     this.circuit = { leds: [], battery: null };
     this.routed = null;
+    this.showRoutes = false;
     this.computeBounds();
+    this.fitView();
+    this.syncButtons();
     if (!this.overlay.hidden) this.render();
   }
 
@@ -160,6 +185,7 @@ export class ElectronicsModal {
 
   open(): void {
     this.selectTool(this.tool);
+    this.syncButtons();
     this.render();
     this.overlay.hidden = false;
     this.emit(); // ask the controller for a fresh plan now that we're visible
@@ -179,7 +205,21 @@ export class ElectronicsModal {
   private clear(): void {
     this.circuit = { leds: [], battery: null };
     this.routed = null;
+    this.showRoutes = false;
+    this.syncButtons();
     this.emit();
+  }
+
+  /** "Auto-route": generate (show) the copper tape for the current battery + LEDs. */
+  private autoRoute(): void {
+    this.showRoutes = true;
+    this.syncButtons();
+    this.emit(); // controller re-plans and pushes a fresh preview, which we now draw
+  }
+
+  /** Reflect active state on the toggle-ish toolbar buttons. */
+  private syncButtons(): void {
+    this.overlay.querySelector(".el-route")!.classList.toggle("is-active", this.showRoutes);
   }
 
   private onCanvasClick(e: MouseEvent): void {
@@ -235,31 +275,105 @@ export class ElectronicsModal {
       maxX = maxY = 1;
     }
     this.bounds = { minX, minY, maxX, maxY };
+    // Content is the PATTERN extent (no margin) so framing/zoom are relative to the pattern, not to
+    // an absolute mm margin — kirigamized models can be a few mm across while AKDE models are ~80mm.
+    this.content = { w: Math.max(maxX - minX, 1e-3), h: Math.max(maxY - minY, 1e-3) };
   }
 
-  /** Flat mm → SVG user space (shift to a positive margin, flip Y like the export). */
+  /** Flat mm → world (content) space: shift to a positive margin, flip Y like the export. */
   private tp(p: Vec2): Vec2 {
     return { x: p.x - this.bounds.minX + MARGIN, y: this.bounds.maxY - p.y + MARGIN };
   }
 
-  /** Pointer client coords → flat mm (inverse of {@link tp}). */
+  /** Pointer client coords → flat mm (accounts for the live viewBox, so pan/zoom-safe). */
   private clientToFlat(e: MouseEvent): Vec2 | null {
+    const w = this.clientToWorld(e);
+    if (!w) return null;
+    return { x: w.x + this.bounds.minX - MARGIN, y: this.bounds.maxY + MARGIN - w.y };
+  }
+
+  /** Pointer client coords → world (content/viewBox) space via the live screen CTM. */
+  private clientToWorld(e: MouseEvent): Vec2 | null {
     const ctm = this.svg.getScreenCTM();
     if (!ctm) return null;
     const pt = this.svg.createSVGPoint();
     pt.x = e.clientX;
     pt.y = e.clientY;
     const loc = pt.matrixTransform(ctm.inverse());
-    return { x: loc.x + this.bounds.minX - MARGIN, y: this.bounds.maxY + MARGIN - loc.y };
+    return { x: loc.x, y: loc.y };
+  }
+
+  // ---- pan / zoom ----------------------------------------------------------
+
+  /** Reset the view to frame the whole pattern with a small relative pad (uniform at any mm scale). */
+  private fitView(): void {
+    const pad = Math.max(this.content.w, this.content.h) * 0.06;
+    // The pattern occupies the world rect [MARGIN, MARGIN, content.w, content.h] (see `tp`).
+    this.view = { x: MARGIN - pad, y: MARGIN - pad, w: this.content.w + 2 * pad, h: this.content.h + 2 * pad };
+    this.applyViewBox();
+  }
+
+  /** Push the current `view` window onto the SVG viewBox (preserveAspectRatio keeps it undistorted). */
+  private applyViewBox(): void {
+    const v = this.view;
+    this.svg.setAttribute("viewBox", `${fmt(v.x)} ${fmt(v.y)} ${fmt(v.w)} ${fmt(v.h)}`);
+  }
+
+  /** Zoom by `factor` (>1 in, <1 out) about a world point (defaults to the view centre). */
+  private zoomBy(factor: number, about?: Vec2): void {
+    const v = this.view;
+    const c = about ?? { x: v.x + v.w / 2, y: v.y + v.h / 2 };
+    // Clamp so we never zoom past ~50× in or past the whole content (with slack) out.
+    const minW = Math.max(this.content.w, this.content.h) / 50;
+    const maxW = Math.max(this.content.w, this.content.h) * 1.5;
+    let nw = v.w / factor;
+    nw = Math.min(maxW, Math.max(minW, nw));
+    const scale = nw / v.w;
+    const nh = v.h * scale;
+    // Keep the `about` point fixed under the cursor.
+    this.view = { x: c.x - (c.x - v.x) * scale, y: c.y - (c.y - v.y) * scale, w: nw, h: nh };
+    this.applyViewBox();
+  }
+
+  private onWheel(e: WheelEvent): void {
+    e.preventDefault();
+    const about = this.clientToWorld(e) ?? undefined;
+    this.zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, about);
+  }
+
+  private onPointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return;
+    this.pan = { x: e.clientX, y: e.clientY, moved: 0 };
+    this.svg.setPointerCapture(e.pointerId);
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    if (!this.pan) return;
+    const ctm = this.svg.getScreenCTM();
+    if (!ctm) return;
+    const dxPix = e.clientX - this.pan.x;
+    const dyPix = e.clientY - this.pan.y;
+    // px → world: ctm.a / ctm.d are world-units-per-pixel inverses (pixels per world unit).
+    this.view.x -= dxPix / (ctm.a || 1);
+    this.view.y -= dyPix / (ctm.d || 1);
+    this.applyViewBox();
+    this.pan.moved += Math.abs(dxPix) + Math.abs(dyPix);
+    this.pan.x = e.clientX;
+    this.pan.y = e.clientY;
+  }
+
+  private onPointerUp(e: PointerEvent): void {
+    const p = this.pan;
+    this.pan = null;
+    if (this.svg.hasPointerCapture(e.pointerId)) this.svg.releasePointerCapture(e.pointerId);
+    // A near-stationary press is a tap → place a component; a drag was a pan.
+    if (p && p.moved < 5) this.onCanvasClick(e);
   }
 
   // ---- rendering -----------------------------------------------------------
 
   private render(): void {
-    const { minX, minY, maxX, maxY } = this.bounds;
-    const w = maxX - minX + 2 * MARGIN;
-    const h = maxY - minY + 2 * MARGIN;
-    this.svg.setAttribute("viewBox", `0 0 ${fmt(w)} ${fmt(h)}`);
+    this.applyViewBox(); // keep the current pan/zoom window across re-renders
 
     const parts: string[] = [];
     // Cloth backing (the full flat faces) under everything — the fabric the tiles sit on.
@@ -276,9 +390,10 @@ export class ElectronicsModal {
       parts.push(`<path d="${d}" class="el-tile" />`);
     }
     // Copper-tape routes: each run thickened into filled rectangles (tapeQuads). PWR/GND tape may
-    // cross/overlap freely (insulated underside). Drawn under the markers.
-    for (const tr of this.routed?.traces ?? []) {
-      const quads = tapeQuads(tr.points, TAPE_W);
+    // cross/overlap freely (insulated underside). Drawn under the markers, only once auto-routed.
+    // Width is relative to the pattern so it reads the same on a 3 mm or an 80 mm model.
+    for (const tr of this.showRoutes ? this.routed?.traces ?? [] : []) {
+      const quads = tapeQuads(tr.points, this.tapeW());
       if (quads.length === 0) continue;
       const d = quads
         .map((q) => "M " + q.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z")
@@ -322,8 +437,16 @@ export class ElectronicsModal {
 
   /** Marker radius scaled to the pattern so it reads at any model size. */
   private markerR(): number {
-    const diag = Math.hypot(this.bounds.maxX - this.bounds.minX, this.bounds.maxY - this.bounds.minY);
-    return Math.max(0.5, diag * 0.012);
+    return this.diag() * 0.012;
+  }
+
+  /** Copper-tape display width, relative to the pattern so it reads at any model size. */
+  private tapeW(): number {
+    return this.diag() * 0.016;
+  }
+
+  private diag(): number {
+    return Math.hypot(this.bounds.maxX - this.bounds.minX, this.bounds.maxY - this.bounds.minY) || 1;
   }
 
   private renderStatus(): void {

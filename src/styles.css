@@ -701,8 +701,11 @@ body {
   letter-spacing: 0.03em;
 }
 .el-tool,
-.el-topo,
-.el-clear {
+.el-route,
+.el-clear,
+.el-zoom-in,
+.el-zoom-out,
+.el-fit {
   font: inherit;
   font-size: 0.85rem;
   padding: 0.25rem 0.55rem;
@@ -711,11 +714,20 @@ body {
   background: #fff;
   cursor: pointer;
 }
+.el-zoom-in,
+.el-zoom-out {
+  min-width: 1.9rem;
+  font-weight: 600;
+  line-height: 1;
+}
 .el-tool:hover,
-.el-topo:hover,
-.el-clear:hover { background: #f2f5fb; }
+.el-route:hover,
+.el-clear:hover,
+.el-zoom-in:hover,
+.el-zoom-out:hover,
+.el-fit:hover { background: #f2f5fb; }
 .el-tool.is-active,
-.el-topo.is-active {
+.el-route.is-active {
   background: #1f6feb;
   color: #fff;
   border-color: #1741c4;
@@ -723,6 +735,7 @@ body {
 .el-canvas-wrap {
   display: flex;
   justify-content: center;
+  align-items: stretch;
   background: #fff;
   border: 1px solid #e2e2e2;
   border-radius: 4px;
@@ -730,21 +743,26 @@ body {
 }
 .el-svg {
   width: 100%;
-  max-height: 60vh;
+  height: 62vh; /* fixed frame so the pattern always fits the same on-screen size (preserveAspectRatio) */
   touch-action: none;
   cursor: crosshair;
 }
-.el-cloth { fill: #eceef1; stroke: #dde0e4; stroke-width: 0.3; }
-.el-tile { fill: #b9bdc4; stroke: #8d929b; stroke-width: 0.4; stroke-linejoin: round; }
+.el-svg:active { cursor: grabbing; }
+/* Strokes are non-scaling (constant screen px) so they don't blow up on small-coordinate models,
+   where 0.4 mm would be a huge fraction of a ~3 mm-wide kirigamized pattern. */
+.el-cloth { fill: #e4e8ee; stroke: #cdd3dc; stroke-width: 0.6; vector-effect: non-scaling-stroke; }
+/* Tiles are fill-only so coplanar (F-edge) triangles merge into clean rigid panels — no internal
+   triangulation lines. The pinched gaps read as the lighter cloth showing through between tiles. */
+.el-tile { fill: #b3b8c1; stroke: none; }
 .el-tape { fill-rule: nonzero; fill-opacity: 0.85; stroke: none; }
 .el-tape-pwr { fill: #ff0000; }
 .el-tape-gnd { fill: #222222; }
-.el-led-leg { stroke: #8a6d1f; stroke-width: 0.7; stroke-linecap: round; }
+.el-led-leg { stroke: #8a6d1f; stroke-width: 1.4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .el-led-leg-orphan { stroke: #7a1f1f; }
 .el-led-pad { fill: #6b5410; }
-.el-led { fill: #e3b341; stroke: #8a6d1f; stroke-width: 0.4; }
+.el-led { fill: #e3b341; stroke: #8a6d1f; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .el-led-orphan { fill: #d24545; stroke: #7a1f1f; }
-.el-batt { fill: #2b2f36; stroke: #000; stroke-width: 0.4; }
+.el-batt { fill: #2b2f36; stroke: #000; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .el-legend {
   margin: 0;
   font-size: 0.8rem;

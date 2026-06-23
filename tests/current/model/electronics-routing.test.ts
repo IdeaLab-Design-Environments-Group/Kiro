@@ -53,11 +53,13 @@ describe("model/electronics-routing: two-net PWR/GND", () => {
     expect(r.unreachable).toEqual([]);
   });
 
-  it("flags an LED whose gap has no path to the battery as unreachable", () => {
-    const r = planRoutes(strip(), circuit({ battery: { face: 0 }, leds: [{ a: 1, b: 2 }, { a: 3, b: 4 }] }));
-    expect(r.unreachable).toContain(1); // the far LED (index 1 in circuit.leds)
+  it("flags an LED whose face-pair shares no gap as unreachable", () => {
+    // Cables route freely (straight), so the only unroutable LED is one whose two faces don't share
+    // a gap at all — faces 0 and 2 are not adjacent, so {0,2} has no legs to land on.
+    const r = planRoutes(strip(), circuit({ battery: { face: 0 }, leds: [{ a: 1, b: 2 }, { a: 0, b: 2 }] }));
+    expect(r.unreachable).toContain(1); // {0,2} (index 1 in circuit.leds)
     expect(r.unreachable).not.toContain(0);
-    expect(r.traces.some((t) => t.net === "pwr")).toBe(true); // the reachable LED still routes
+    expect(r.traces.some((t) => t.net === "pwr")).toBe(true); // the valid LED still routes
   });
 
   it("emits only PWR and GND nets — no series chain", () => {
