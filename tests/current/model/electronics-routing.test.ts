@@ -1,0 +1,76 @@
+import { describe, expect, it } from "vitest";
+import { planRoutes } from "../../../src/model/electronics-routing.js";
+import { gapGraph, type Circuit, type Vec2 } from "../../../src/model/electronics.js";
+import type { FoldFile } from "../../../src/model/fold-file.js";
+
+/**
+ * A 1×3 strip of unit squares (faces 0-1-2, gaps {0,1} and {1,2}) plus a
+ * disconnected pair of squares far away (faces 3-4, gap {3,4}) that shares no
+ * edge with the strip — so an LED on {3,4} can never be routed to a battery on
+ * the strip.
+ */
+function strip(): FoldFile {
+  return {
+    vertices_coords: [
+      [0, 0], [10, 0], [10, 10], [0, 10], // square 0
+      [20, 0], [20, 10], // + square 1
+      [30, 0], [30, 10], // + square 2
+      [100, 0], [110, 0], [110, 10], [100, 10], // square 3
+      [120, 0], [120, 10], // + square 4
+    ],
+    faces_vertices: [
+      [0, 1, 2, 3], // 0
+      [1, 4, 5, 2], // 1
+      [4, 6, 7, 5], // 2
+      [8, 9, 10, 11], // 3 (far)
+      [9, 12, 13, 10], // 4 (far)
+    ],
+    edges_vertices: [
+      [1, 2], // gap 0|1
+      [4, 5], // gap 1|2
+      [9, 10], // gap 3|4
+    ],
+    edges_assignment: ["M", "M", "M"],
+  };
+}
+
+const circuit = (over: Partial<Circuit>): Circuit => ({ leds: [], battery: null, ...over });
+const near = (a: Vec2, b: Vec2, eps = 1e-6) => Math.hypot(a.x - b.x, a.y - b.y) < eps;
+
+describe("model/electronics-routing: two-net PWR/GND", () => {
+  it("routes a PWR rail to the LED's a-leg and a GND rail to its b-leg", () => {
+    const fold = strip();
+    const r = planRoutes(fold, circuit({ battery: { face: 0 }, leds: [{ a: 1, b: 2 }] }));
+    const pwr = r.traces.filter((t) => t.net === "pwr");
+    const gnd = r.traces.filter((t) => t.net === "gnd");
+    expect(pwr).toHaveLength(1);
+    expect(gnd).toHaveLength(1);
+
+    // The two rails terminate on the two tiles the LED bridges (its pinched leg pads).
+    const gap = gapGraph(fold).gaps.find((g) => g.faceA === 1 && g.faceB === 2)!;
+    expect(near(pwr[0]!.points.at(-1)!, gap.legA)).toBe(true); // a-leg on face 1 (PWR)
+    expect(near(gnd[0]!.points.at(-1)!, gap.legB)).toBe(true); // b-leg on face 2 (GND)
+    expect(r.unreachable).toEqual([]);
+  });
+
+  it("flags an LED whose gap has no path to the battery as unreachable", () => {
+    const r = planRoutes(strip(), circuit({ battery: { face: 0 }, leds: [{ a: 1, b: 2 }, { a: 3, b: 4 }] }));
+    expect(r.unreachable).toContain(1); // the far LED (index 1 in circuit.leds)
+    expect(r.unreachable).not.toContain(0);
+    expect(r.traces.some((t) => t.net === "pwr")).toBe(true); // the reachable LED still routes
+  });
+
+  it("emits only PWR and GND nets — no series chain", () => {
+    const r = planRoutes(strip(), circuit({ battery: { face: 0 }, leds: [{ a: 1, b: 2 }] }));
+    expect(r.traces.every((t) => t.net === "pwr" || t.net === "gnd")).toBe(true);
+  });
+});
+
+describe("model/electronics-routing: degenerate", () => {
+  it("returns LED/battery points but no traces when there is no battery", () => {
+    const r = planRoutes(strip(), circuit({ leds: [{ a: 1, b: 2 }] }));
+    expect(r.traces).toEqual([]);
+    expect(r.ledPoints).toHaveLength(1);
+    expect(r.batteryPoint).toBeNull();
+  });
+});
