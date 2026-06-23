@@ -14,11 +14,10 @@ describe("view/header-actions", () => {
     header.appendActionButtons();
 
     const children = Array.from(header.element.children) as any[];
-    // [Create pyramid] [Create 2.5D] [Load sample] [Kirigamize ▶]
-    expect(children.map((c) => c.tagName)).toEqual(["button", "button", "button", "button"]);
+    // [Create pyramid] [Load sample] [Kirigamize ▶]
+    expect(children.map((c) => c.tagName)).toEqual(["button", "button", "button"]);
     expect(children.map((c) => c.textContent)).toEqual([
       "Create pyramid",
-      "Create 2.5D",
       "Load sample",
       "Kirigamize ▶",
     ]);
@@ -37,13 +36,13 @@ describe("view/header-actions", () => {
 
     const children = Array.from(header.element.children) as HTMLButtonElement[];
     children[0]?.click(); // Create pyramid
-    children[2]?.click(); // Load sample
+    children[1]?.click(); // Load sample
     header.setKirigamizeEnabled(true);
-    children[3]?.click(); // Kirigamize ▶
+    children[2]?.click(); // Kirigamize ▶
 
     expect(onCreate).toHaveBeenCalledTimes(1);
     expect(onSample).toHaveBeenCalledTimes(1);
     expect(onKirigamize).toHaveBeenCalledTimes(1);
-    expect(children[3]?.disabled).toBe(false);
+    expect(children[2]?.disabled).toBe(false);
   });
 });

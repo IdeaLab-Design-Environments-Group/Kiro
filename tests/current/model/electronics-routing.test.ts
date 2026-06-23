@@ -38,28 +38,48 @@ const circuit = (over: Partial<Circuit>): Circuit => ({ leds: [], battery: null,
 const near = (a: Vec2, b: Vec2, eps = 1e-6) => Math.hypot(a.x - b.x, a.y - b.y) < eps;
 
 describe("model/electronics-routing: two-net PWR/GND", () => {
-  it("routes a PWR rail to the LED's a-leg and a GND rail to its b-leg", () => {
+  it("routes a PWR bus to the LED's a-leg and a GND bus to its b-leg", () => {
     const fold = strip();
     const r = planRoutes(fold, circuit({ battery: { face: 0 }, leds: [{ a: 1, b: 2 }] }));
     const pwr = r.traces.filter((t) => t.net === "pwr");
     const gnd = r.traces.filter((t) => t.net === "gnd");
-    expect(pwr).toHaveLength(1);
-    expect(gnd).toHaveLength(1);
+    expect(pwr.length).toBeGreaterThan(0);
+    expect(gnd.length).toBeGreaterThan(0);
 
-    // The two rails terminate on the two tiles the LED bridges (its pinched leg pads).
+    // Each net reaches the LED's leg pad (a stub lands within the rail offset of the pad).
     const gap = gapGraph(fold).gaps.find((g) => g.faceA === 1 && g.faceB === 2)!;
-    expect(near(pwr[0]!.points.at(-1)!, gap.legA)).toBe(true); // a-leg on face 1 (PWR)
-    expect(near(gnd[0]!.points.at(-1)!, gap.legB)).toBe(true); // b-leg on face 2 (GND)
+    const reaches = (net: typeof pwr, leg: Vec2) =>
+      net.some((t) => t.points.some((p) => Math.hypot(p.x - leg.x, p.y - leg.y) < 1)); // off = diag*0.006 ≈ 0.19
+    expect(reaches(pwr, gap.legA)).toBe(true);
+    expect(reaches(gnd, gap.legB)).toBe(true);
     expect(r.unreachable).toEqual([]);
   });
 
+  it("keeps every copper trace inside the body (never flies out into empty space)", () => {
+    const fold = strip();
+    const r = planRoutes(fold, circuit({ battery: { face: 0 }, leds: [{ a: 1, b: 2 }] }));
+    // The connected strip spans x∈[0,30], y∈[0,10]; allow a small rail-offset slack.
+    const m = 1;
+    for (const t of r.traces) for (const p of t.points) {
+      expect(p.x).toBeGreaterThanOrEqual(0 - m);
+      expect(p.x).toBeLessThanOrEqual(30 + m);
+      expect(p.y).toBeGreaterThanOrEqual(0 - m);
+      expect(p.y).toBeLessThanOrEqual(10 + m);
+    }
+  });
+
   it("flags an LED whose face-pair shares no gap as unreachable", () => {
-    // Cables route freely (straight), so the only unroutable LED is one whose two faces don't share
-    // a gap at all — faces 0 and 2 are not adjacent, so {0,2} has no legs to land on.
+    // faces 0 and 2 are not adjacent, so {0,2} has no legs to land on.
     const r = planRoutes(strip(), circuit({ battery: { face: 0 }, leds: [{ a: 1, b: 2 }, { a: 0, b: 2 }] }));
     expect(r.unreachable).toContain(1); // {0,2} (index 1 in circuit.leds)
     expect(r.unreachable).not.toContain(0);
     expect(r.traces.some((t) => t.net === "pwr")).toBe(true); // the valid LED still routes
+  });
+
+  it("flags an LED in a disconnected body component as unreachable", () => {
+    // The far pair (faces 3,4) shares a real gap but is not connected to the battery's body.
+    const r = planRoutes(strip(), circuit({ battery: { face: 0 }, leds: [{ a: 3, b: 4 }] }));
+    expect(r.unreachable).toContain(0);
   });
 
   it("emits only PWR and GND nets — no series chain", () => {

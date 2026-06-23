@@ -9,14 +9,12 @@
 import { type AppState, AppStore } from "../model/app-store.js";
 import { deriveFacts } from "../model/derive-facts.js";
 import { type FoldFile, type LoadedModel } from "../model/fold-file.js";
-import { summarizeFkldForDisplay } from "../model/fkld-metadata.js";
 import { canSimulate } from "../sim/index.js";
 import { statusFromError } from "../core/errors.js";
 import { loadedStatus, readModelFile, fetchSample } from "../services/model-loader.js";
 import {
   kirigamizeMesh,
   createAkdePyramid,
-  create25dSign,
   fkldFromPatternGrid,
   serializePatternGrid,
 } from "../services/pattern-service.js";
@@ -27,7 +25,6 @@ import { resolveRoutedCircuit } from "../services/electronics-service.js";
 import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
 import { EMPTY_CIRCUIT, type Circuit } from "../model/electronics.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
-import type { MetadataPanel } from "../view/metadata-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
 import type { HeaderActions } from "../view/header-actions.js";
 import type { SimModal } from "../view/sim-modal.js";
@@ -43,7 +40,6 @@ export class AppController {
   constructor(
     private readonly store: AppStore,
     private readonly convert: ConvertPanel,
-    private readonly metadata: MetadataPanel,
     private readonly viewer: ViewerFrame,
     private readonly header: HeaderActions,
     private readonly sim: SimModal,
@@ -86,7 +82,6 @@ export class AppController {
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
     this.header.onCreatePyramid(() => this.createPyramid());
-    this.header.onCreate25d(() => this.create25d());
     this.header.onLoadSample(() => void this.loadSample());
     this.header.onKirigamize(() => this.kirigamize());
 
@@ -108,7 +103,6 @@ export class AppController {
     const m = state.model;
     this.convert.renderFacts(m ? deriveFacts(m) : []);
     this.convert.setStatus(state.status.msg, state.status.kind);
-    this.metadata.render(m && m.kind === "fold" ? summarizeFkldForDisplay(m.object) : []);
     this.header.setKirigamizeEnabled(!!m);
     // Sim enablement follows what would actually be simulated: the viewer's
     // model first, else the loaded fold model. (Previously the viewer-driven
@@ -191,27 +185,6 @@ export class AppController {
       const outcome = createAkdePyramid();
       this.showPattern(outcome.fkld, outcome.name);
       this.store.setStatus(outcome.summary, "ok");
-    } catch (err) {
-      const { msg, kind } = statusFromError(err, "create");
-      this.store.setStatus(msg, kind);
-    }
-  }
-
-  /**
-   * Generate a 2.5D cut-and-fold sign (Demaine et al. 2023, Theorem 1). Prompts
-   * for sign text; blank/cancel falls back to the Space Invader (paper Fig. 1).
-   * The result is a flat crease-cut pattern (parallel cuts + 90° M/V creases)
-   * that the 3D Sim pops up into a relief.
-   */
-  create25d(): void {
-    const text = typeof window !== "undefined" && typeof window.prompt === "function"
-      ? window.prompt("2.5D cut-and-fold sign — type text (A–Z, 0–9), or leave blank for a Space Invader:", "")
-      : "";
-    if (text === null) return; // cancelled
-    try {
-      const outcome = create25dSign({ text });
-      this.showPattern(outcome.fkld, outcome.name);
-      this.store.setStatus(outcome.summary, outcome.ok ? "ok" : "bad");
     } catch (err) {
       const { msg, kind } = statusFromError(err, "create");
       this.store.setStatus(msg, kind);

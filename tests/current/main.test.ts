@@ -28,12 +28,6 @@ vi.mock("../../src/view/convert-panel.js", () => ({
   },
 }));
 
-vi.mock("../../src/view/metadata-panel.js", () => ({
-  MetadataPanel: class MetadataPanel {
-    element = { id: "metadata" };
-  },
-}));
-
 vi.mock("../../src/view/viewer-frame.js", () => ({
   ViewerFrame: class ViewerFrame {
     element = { id: "viewer" };
@@ -118,10 +112,10 @@ describe("main.ts", () => {
   it("wires the composition root and loads the sample quietly", async () => {
     await import("../../src/main.ts");
 
-    expect(state.appChildren.map((x) => x.id)).toEqual(["convert", "metadata", "viewer"]);
+    expect(state.appChildren.map((x) => x.id)).toEqual(["convert", "viewer"]);
     expect(state.headerChildren.map((x) => x.id)).toEqual(["header-actions"]);
     expect(state.controllerArgs).toHaveLength(1);
-    expect(state.controllerArgs[0]).toHaveLength(9);
+    expect(state.controllerArgs[0]).toHaveLength(8);
     expect(state.loadSampleCalls).toEqual([false]);
     expect(state.viewCalls).toEqual([
       "sim.mountTrigger",
@@ -142,7 +136,7 @@ describe("main.ts", () => {
 
     await import("../../src/main.ts");
 
-    expect(state.appChildren.map((x) => x.id)).toEqual(["convert", "metadata", "viewer"]);
+    expect(state.appChildren.map((x) => x.id)).toEqual(["convert", "viewer"]);
     expect(state.headerChildren).toEqual([]);
     expect(state.loadSampleCalls).toEqual([false]);
   });

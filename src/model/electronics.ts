@@ -338,6 +338,45 @@ export function gapGraph(
   return { faceCount, pos, adj, gaps };
 }
 
+/** A graph for routing copper INSIDE the body: face centroids + every interior-edge midpoint. */
+export interface RouteGraph {
+  faceCount: number;
+  /** Node positions (flat mm): `0..faceCount-1` are centroids, the rest are interior-edge midpoints. */
+  pos: Vec2[];
+  adj: { to: number; w: number }[][];
+}
+
+/**
+ * Build the in-body route graph: like {@link gapGraph} but links faces across **every** interior edge
+ * shared by two faces (F facets too, not only gaps), crossing at the edge midpoint. Routing on this
+ * keeps copper strictly inside the pattern silhouette — every hop steps across an interior boundary,
+ * so a trace never leaves the body the way a free straight line can.
+ */
+export function faceRouteGraph(fold: FoldFile, faces: FlatFace[] = flatFaces(fold)): RouteGraph {
+  const pts = flatPoints(fold);
+  const pos: Vec2[] = faces.map((f) => f.centroid);
+  const adj: { to: number; w: number }[][] = faces.map(() => []);
+  const shared = sharedEdges(faces);
+  for (const [, rec] of shared) {
+    if (rec.faces.length !== 2) continue; // boundary or non-manifold — no interior crossing
+    const pa = pts[rec.a] ?? { x: 0, y: 0 };
+    const pb = pts[rec.b] ?? { x: 0, y: 0 };
+    const mid = mid2(pa, pb);
+    const [fA, fB] = rec.faces as [number, number];
+    const midNode = pos.length;
+    pos.push(mid);
+    adj.push([]);
+    const link = (face: number) => {
+      const w = dist2(pos[face]!, mid);
+      adj[face]!.push({ to: midNode, w });
+      adj[midNode]!.push({ to: face, w });
+    };
+    link(fA);
+    link(fB);
+  }
+  return { faceCount: faces.length, pos, adj };
+}
+
 /** The gap that an LED straddles (matching its unordered face pair), or null if that gap is gone. */
 export function gapForLed(gaps: GapEdge[], led: Led): GapEdge | null {
   return (

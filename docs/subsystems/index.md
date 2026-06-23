@@ -23,7 +23,6 @@ single working area: files, data flow, extension points, and failure modes.
 | Pipeline unfolding/placement | `pipeline-unfolding-placement.md` | Cut mesh splitting, vent slivers, flat development, edge classification. |
 | Pipeline FKLD emission | `pipeline-emission.md` | FKLD serialization, guided-fold frame, driven flags, extension validation. |
 | Pipeline verification | `pipeline-verification.md` | Equilibrium verification, metrics, retry hook. |
-| 2.5D cut/fold signage | `cutfold25d.md` | Orthogonal pixel/text height-map generator and guided relief FKLD contract. |
 | Bistable star tiling | `bst-pipeline.md` | BST uniform/surface-fit pipeline, FKLD emission, and method-selector route. |
 | Simulation | `../simulation.md` | Bar-and-hinge solver and guided/free simulation modes. |
 | CPU simulation | `simulation-cpu.md` | Reference solver, model arrays, stabilization, debugging. |

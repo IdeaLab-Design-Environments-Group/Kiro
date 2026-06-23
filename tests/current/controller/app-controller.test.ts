@@ -23,14 +23,6 @@ class ConvertPanelMock {
   }
 }
 
-class MetadataPanelMock {
-  renderCalls: unknown[] = [];
-
-  render(sections: unknown): void {
-    this.renderCalls.push(sections);
-  }
-}
-
 class ViewerFrameMock {
   showCalls: Array<{ object: FoldFile; name: string }> = [];
   private shown: { object: FoldFile; name: string } | null = null;
@@ -58,17 +50,12 @@ class ViewerFrameMock {
 
 class HeaderActionsMock {
   createPyramidHandler: (() => void) | null = null;
-  create25dHandler: (() => void) | null = null;
   loadSampleHandler: (() => void) | null = null;
   kirigamizeHandler: (() => void) | null = null;
   enabledCalls: boolean[] = [];
 
   onCreatePyramid(handler: () => void): void {
     this.createPyramidHandler = handler;
-  }
-
-  onCreate25d(handler: () => void): void {
-    this.create25dHandler = handler;
   }
 
   onLoadSample(handler: () => void): void {
@@ -192,7 +179,6 @@ function makeFold(overrides: Partial<FoldFile> = {}): FoldFile {
 function setup() {
   const store = new AppStore();
   const convert = new ConvertPanelMock();
-  const metadata = new MetadataPanelMock();
   const viewer = new ViewerFrameMock();
   const header = new HeaderActionsMock();
   const sim = new SimModalMock();
@@ -202,7 +188,6 @@ function setup() {
   const controller = new AppController(
     store,
     convert as never,
-    metadata as never,
     viewer as never,
     header as never,
     sim as never,
@@ -210,7 +195,7 @@ function setup() {
     patternEditor as never,
     electronics as never,
   );
-  return { controller, store, convert, metadata, viewer, header, sim, exporter, patternEditor, electronics };
+  return { controller, store, convert, viewer, header, sim, exporter, patternEditor, electronics };
 }
 
 describe("controller/app-controller", () => {
@@ -227,11 +212,10 @@ describe("controller/app-controller", () => {
   });
 
   it("renders initial empty state and wires a sim provider", () => {
-    const { convert, metadata, header, sim } = setup();
+    const { convert, header, sim } = setup();
 
     expect(convert.factsCalls[0]).toEqual([]);
     expect(convert.statusCalls[0]).toEqual({ msg: "No model loaded.", kind: "" });
-    expect(metadata.renderCalls[0]).toEqual([]);
     expect(header.enabledCalls[0]).toBe(false);
     expect(sim.enabledCalls[0]).toBe(false);
     expect(sim.provider?.()).toBeNull();

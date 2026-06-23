@@ -249,7 +249,7 @@ export class SimCanvas {
     // Frame the camera to the model's ACTUAL bounding box — the union of the flat rest and the
     // folded goal, so nothing crops as the fold slider scrubs — rather than a fixed radius. The
     // importer normalizes every model to a bounding-SPHERE of radius 1, so a high-aspect relief (a
-    // tall, narrow 2.5D sign especially) occupies only a thin slice of a fixed sphere and renders as
+    // tall, narrow relief especially) occupies only a thin slice of a fixed sphere and renders as
     // a sliver. Fitting to the box makes any aspect fill the view. Tightening near/far to the box
     // also keeps the ~250:1 depth ratio that stops coincident folded faces z-fighting.
     const mdl = scene.model;

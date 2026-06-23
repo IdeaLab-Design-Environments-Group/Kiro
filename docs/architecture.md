@@ -117,7 +117,6 @@ Simulation files:
 
 Pipeline files:
 
-- `src/pipeline/cutfold25d.ts` implements the orthogonal 2.5D text/art route.
 - `src/pipeline/bst/` implements the bistable star tiling route.
 - `src/pipeline/types.ts` defines cross-stage DTOs and `PipelineError`.
 - `src/pipeline/import.ts` parses OBJ and ASCII STL text into `TriMesh`.

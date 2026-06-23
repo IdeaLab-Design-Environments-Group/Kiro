@@ -42,7 +42,6 @@ src/
       star-tiling.ts
       types.ts
     conditioning.ts
-    cutfold25d.ts
     curvature.ts
     emit.ts
     import.ts
@@ -198,7 +197,6 @@ Rules:
 | File | Stage | Responsibility |
 | --- | --- | --- |
 | `types.ts` | shared | DTOs, `PipelineError`, cross-stage contracts. |
-| `cutfold25d.ts` | 2.5D | Orthogonal cut-and-fold signage generator from bitmap/text height maps. |
 | `import.ts` | M1 | Parse OBJ/ASCII STL text into `TriMesh`. |
 | `conditioning.ts` | M1 | Weld, drop degenerates, orient, genus gate. |
 | `mesh.ts` | M1 | Topology, edge keys, face angles, boundary loops, wedges. |
@@ -215,10 +213,6 @@ Rules:
 bistable star tiling generation, surface-fit relaxation, bistable bar placement,
 and FKLD emission for the `Bistable star tiling` method selector path. See
 `docs/subsystems/bst-pipeline.md`.
-
-`src/pipeline/cutfold25d.ts` is the other sibling route. It generates 2.5D
-orthogonal cut/fold signage from bitmap/text height maps and emits guided FKLD
-through `src/services/pattern-service.ts`. See `docs/subsystems/cutfold25d.md`.
 
 Rules:
 

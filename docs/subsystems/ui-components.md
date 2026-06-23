@@ -53,7 +53,6 @@ Output intent:
 Output intents:
 
 - `onCreatePyramid(handler)`;
-- `onCreate25d(handler)`;
 - `onLoadSample(handler)`;
 - `onKirigamize(handler)`.
 
@@ -64,7 +63,7 @@ State update:
 Button order:
 
 ```text
-[3D Sim] [Create pyramid] [Create 2.5D] [Load sample] [method] [Kirigamize ▶]
+[3D Sim] [Create pyramid] [Load sample] [method] [Kirigamize ▶]
 ```
 
 `3D Sim` is mounted by `SimModal`; the remaining buttons are appended by

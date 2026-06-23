@@ -1,8 +1,8 @@
 # Development
 
 This repo is a Vite/TypeScript app with several active generation paths: the
-general mesh Kirigamizer pipeline, AKDE pyramid creation, 2.5D signage,
-bistable star tiling, pattern editing, and simulation.
+general mesh Kirigamizer pipeline, AKDE pyramid creation, bistable star
+tiling, pattern editing, and simulation.
 
 For placement decisions, read these first:
 
@@ -43,8 +43,8 @@ Use the MVC boundary when adding code:
 - Add app orchestration under `src/controller/`.
 - Add mesh-to-kirigami conversion stages under `src/pipeline/`.
 - Add standalone generation routes that do not consume the full M1-M5 chain
-  under `src/pipeline/`, but document them as sibling routes. Current examples:
-  `src/pipeline/cutfold25d.ts` and `src/pipeline/bst/`.
+  under `src/pipeline/`, but document them as sibling routes. Current example:
+  `src/pipeline/bst/`.
 - Add folding physics or scene construction under `src/sim/`.
 - Keep `src/main.ts` as a composition root.
 

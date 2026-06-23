@@ -82,9 +82,9 @@ BST emission writes:
 - auxetic/bistable metadata under `fkld:` keys;
 - bar connector geometry when bars are kept.
 
-The sim uses the same guided-frame mechanism as the general pipeline and 2.5D
-signage: the file declares the target deployment, and the fold adapter drives
-vertices to that target.
+The sim uses the same guided-frame mechanism as the general pipeline: the file
+declares the target deployment, and the fold adapter drives vertices to that
+target.
 
 ## Failure Modes
 

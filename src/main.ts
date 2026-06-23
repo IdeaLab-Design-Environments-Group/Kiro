@@ -3,7 +3,7 @@
  *
  *   Model       src/model/   — AppStore (observable UI state) + derive-facts presenter;
  *                              the simulation domain model lives under src/sim/.
- *   View        src/view/    — ConvertPanel · MetadataPanel · ViewerFrame · HeaderActions ·
+ *   View        src/view/    — ConvertPanel · ViewerFrame · HeaderActions ·
  *                              SimModal. Dumb: render state, emit user intents.
  *   Controller  src/controller/ — AppController: file IO/parsing, the kirigamize/sample
  *                              actions, and the store↔view subscription.
@@ -13,7 +13,6 @@
 import "./styles.css";
 import { AppStore } from "./model/app-store.js";
 import { ConvertPanel } from "./view/convert-panel.js";
-import { MetadataPanel } from "./view/metadata-panel.js";
 import { ViewerFrame } from "./view/viewer-frame.js";
 import { HeaderActions } from "./view/header-actions.js";
 import { SimModal } from "./view/sim-modal.js";
@@ -28,11 +27,10 @@ if (!app) throw new Error("Missing #app root");
 // ---- Model ----------------------------------------------------------------
 const store = new AppStore();
 
-// ---- Views (three columns + header actions + sim modal) -------------------
+// ---- Views (two columns + header actions + sim modal) ---------------------
 const convert = new ConvertPanel();
-const metadata = new MetadataPanel();
 const viewer = new ViewerFrame();
-app.append(convert.element, metadata.element, viewer.element);
+app.append(convert.element, viewer.element);
 
 const simModal = new SimModal();
 const exportModal = new ExportModal();
@@ -47,7 +45,7 @@ header.appendActionButtons(); // …then Create / Load sample / Kirigamize ▶
 document.querySelector(".app-header")?.appendChild(header.element);
 
 // ---- Controller -----------------------------------------------------------
-const controller = new AppController(store, convert, metadata, viewer, header, simModal, exportModal, patternEditor, electronics);
+const controller = new AppController(store, convert, viewer, header, simModal, exportModal, patternEditor, electronics);
 
 // Default state: load the bundled FKLD example so the panels, viewer, and 3D
 // Sim are all live on first paint (no-op under file:// where fetch is blocked).

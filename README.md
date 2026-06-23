@@ -10,7 +10,6 @@ generation paths:
 - the general mesh pipeline (`.obj`/ASCII `.stl` → condition → curvature/cuts →
   unfold/pack → FKLD → sim verification);
 - AKDE pyramid creation;
-- 2.5D orthogonal cut-and-fold signage;
 - bistable star tiling surface programming;
 - a pattern editor.
 
@@ -86,7 +85,6 @@ npm run preview   # serve the production build
 | `docs/pipeline.md` | Mesh import, conditioning, curvature, and cut-planning pipeline contracts. |
 | `docs/testing.md` | Build/test checks and troubleshooting checklists. |
 | `docs/development.md` | Local commands, feature-placement rules, testing expectations, and generated-file notes. |
-| `docs/subsystems/cutfold25d.md` | 2.5D orthogonal cut-and-fold signage generator. |
 | `docs/subsystems/bst-pipeline.md` | Bistable star tiling pipeline and surface-fit route. |
 | `docs/subsystems/export-modal.md` | Export modal provider lifecycle for SVG and tile STL downloads. |
 | `docs/subsystems/stl-export.md` | Printed tile STL export and adaptive subdivision. |
@@ -112,7 +110,6 @@ npm run preview   # serve the production build
 | `src/view/` | DOM/WebGL views: convert panel, metadata panel, viewer frame, header actions, sim modal/canvas, pattern-editor modal |
 | `src/styles.css` | AKDE-derived theme (incl. 3D-sim modal) |
 | `src/pipeline/` | pure mesh-to-kirigami conversion stages and DTO contracts |
-| `src/pipeline/cutfold25d.ts` | 2.5D signage generator from pixel/text height maps. |
 | `src/pipeline/bst/` | bistable star tiling generation and surface-fit pipeline. |
 | `src/sim/` | simulation domain: bar-and-hinge fold engine + `fold-adapter`/`scene` builders |
 | `docs/` | architecture, simulation, and development notes |

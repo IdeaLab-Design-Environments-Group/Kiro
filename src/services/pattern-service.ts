@@ -16,8 +16,6 @@ import { computeState, defaultInputs } from "@kirigami/model/geometry.js";
 import { buildFkldFile } from "@kirigami/model/fkld-export.js";
 // Secondary "draw a crease pattern" path: a painted lattice → triangulated FOLD draft.
 import { gridToFold, type FoldDraft, type PatternGrid } from "../model/pattern-grid.js";
-// 2.5D cut-and-fold "signage" generator (Demaine et al. 2023, Theorem 1).
-import { build25dPattern, SPACE_INVADER, textToBitmap } from "../pipeline/cutfold25d.js";
 import { KEYS, serializeFkld } from "@dayangac/fkld";
 
 export interface PatternOutcome {
@@ -73,51 +71,6 @@ export function createAkdePyramid(): PatternOutcome {
   };
 }
 
-/**
- * Generate a **2.5D cut-and-fold sign** (Demaine et al. 2023, Theorem 1): a pixel
- * height map → orthogonal **parallel-cut** columns + 90° mountain/valley creases
- * that pop up into the relief from one flat sheet. With `text`, the 3×5 pixel
- * font renders a textual sign; otherwise the classic Space Invader (the paper's
- * Fig. 1). The wall creases carry **±90° `edges_foldAngle`** so the 3D Sim folds
- * the true relief (not a flat ±180° fold). Throws AppError("create") on failure.
- */
-export function create25dSign(input: { text?: string } = {}): PatternOutcome {
-  const text = (input.text ?? "").trim();
-  const bitmap = text ? textToBitmap(text) : SPACE_INVADER;
-  const stem = text ? `sign-${text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "text"}` : "space-invader";
-  let built;
-  try {
-    built = build25dPattern(bitmap, { cellMm: 12 });
-  } catch (err) {
-    throw new AppError("create", err instanceof Error ? err.message : String(err));
-  }
-  const { grid, stats, foldedForm } = built;
-  const draft = gridToFold(grid);
-  // Wall creases fold to 90°, not the default 180° — tag every M/V edge ±90° (deg).
-  const foldAngle = draft.edges_assignment.map((a) => (a === "M" ? -90 : a === "V" ? 90 : null));
-  const fkld = patternDraftToFkld(draft, grid, `${stem} (2.5D cut & fold)`, foldAngle);
-  // A strip of parallel ±90° creases is a symmetric mechanism: free-folding from flat
-  // can't choose a branch and stays flat. So ship the relief as a guided `foldedForm` +
-  // `fkld:vertices_driven` (every vertex) — the 3D Sim drives the sheet into the relief as
-  // the fold ramps, exactly as the (also-not-a-free-equilibrium) AKDE cone is handled.
-  if (foldedForm.length === draft.vertices_coords.length) {
-    fkld.file_frames = [
-      { frame_classes: ["foldedForm"], frame_title: `${stem} relief`, vertices_coords: foldedForm },
-    ];
-    fkld["fkld:vertices_driven"] = draft.vertices_coords.map(() => 1);
-  }
-  return {
-    fkld,
-    name: `${stem}-25d.fkld`,
-    ok: true,
-    summary:
-      `2.5D ${text ? `sign "${text.toUpperCase()}"` : "Space Invader"} → ` +
-      `${stats.cols}×${stats.rows} pixels, V=${stats.variation} → ${stats.cols}×${stats.totalRows} sheet: ` +
-      `${stats.interiorCuts} parallel cuts, ${stats.mountainCreases} mountain + ${stats.valleyCreases} valley (90°) creases. ` +
-      `Open 3D Sim to pop it up.`,
-  };
-}
-
 // ---- secondary path: pattern editor (a painted lattice → FKLD) -------------
 
 /**
@@ -168,7 +121,7 @@ function patternDraftToFkld(
     edges_assignment: draft.edges_assignment,
     faces_vertices: draft.faces_vertices,
   };
-  // Explicit target fold angles (deg) — e.g. 2.5D walls fold to ±90°, not the
+  // Explicit target fold angles (deg) — e.g. some walls fold to ±90°, not the
   // M/V default of ±180°. The sim reads `edges_foldAngle` over the assignment default.
   if (foldAngleDeg && foldAngleDeg.some((a) => a != null)) out.edges_foldAngle = foldAngleDeg;
   // Only emit the cut-subtype array when there are cuts to describe.
