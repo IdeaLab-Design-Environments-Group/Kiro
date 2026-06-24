@@ -124,11 +124,38 @@
     }
     main {
       display: grid;
-      grid-template-columns: 1fr 320px;
+      grid-template-columns: minmax(0, 1fr) 12px var(--sidebar-w, 320px);
       flex: 1 1 auto;
       min-height: 0;  /* fill the space the removed status bar used to take */
     }
-    main.no-sidebar { grid-template-columns: 1fr 0; }
+    main.no-sidebar { grid-template-columns: minmax(0, 1fr) 26px 0; }
+    #pane-resizer {
+      position: relative;
+      align-self: stretch;
+      display: flex; align-items: center; justify-content: center;
+      cursor: col-resize;
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+    }
+    #pane-resizer::before {
+      content: ""; width: 3px; height: 90%;
+      border-radius: 3px; background: transparent;
+      transition: background 0.15s;
+    }
+    #pane-resizer:hover::before, #pane-resizer.dragging::before { background: #c9c3b0; }
+    main.no-sidebar #pane-resizer { cursor: default; }
+    #sidebar-collapse {
+      position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+      width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
+      padding: 0; font: inherit; font-size: 14px; line-height: 1;
+      color: var(--muted); background: var(--panel);
+      border: 1px solid var(--border); border-radius: 50%;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+      cursor: pointer; z-index: 3;
+      transition: color 0.13s, border-color 0.13s;
+    }
+    #sidebar-collapse:hover { color: #1f6feb; border-color: #c9c3b0; }
     .canvas-wrap {
       position: relative;
       background:
@@ -144,7 +171,6 @@
     svg { width: 100%; height: 100%; display: block; user-select: none; }
     aside {
       background: var(--panel);
-      border-left: 1px solid var(--border);
       padding: 14px 18px;
       overflow-y: auto;
       font-size: 12px;
@@ -157,10 +183,14 @@
     aside h2:first-child { margin-top: 0; }
     aside .row {
       display: flex; justify-content: space-between;
-      padding: 1px 0; border-bottom: 1px dotted var(--border);
+      gap: 16px; align-items: baseline;
+      padding: 4px 0; border-bottom: 1px solid #efece1;
     }
-    aside .row .label { color: var(--muted); }
-    aside .row .value { font-variant-numeric: tabular-nums; }
+    aside .row .label { color: var(--muted); flex: 0 0 auto; white-space: nowrap; }
+    aside .row .value {
+      text-align: right; font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere; min-width: 0;
+    }
     aside pre {
       background: var(--bg); border: 1px solid var(--border);
       border-radius: 3px; padding: 6px;
@@ -233,6 +263,10 @@
       <span class="lbl">Toggle:</span>
       <!-- toggles inserted by JS -->
     </div>
+    <div class="group" id="shape-group" hidden>
+      <span class="lbl">Shape:</span>
+      <button id="shape-toggle" title="Switch between the flat cut pattern and the folded form">Folded</button>
+    </div>
     <div class="group">
       <span class="lbl">View:</span>
       <button data-view="x">x</button>
@@ -265,6 +299,7 @@
 
   <main>
     <div class="canvas-wrap" id="canvas-wrap"><svg id="canvas"></svg></div>
+    <div id="pane-resizer"><button id="sidebar-collapse" type="button" title="Hide sidebar">›</button></div>
     <aside id="sidebar"></aside>
   </main>
 
@@ -336,8 +371,24 @@
   }
 
   // ---- model build: derive vs/es/fs from a parsed FKLD/FOLD file -----------
+  // The folded-form goal coords the kirigamizer emits (a `foldedForm` file_frame), or null.
+  function foldedCoords(file) {
+    const frames = file && file.file_frames;
+    if (!Array.isArray(frames)) return null;
+    for (const fr of frames) {
+      const cls = fr && (fr.frame_classes || fr['frame_classes']);
+      const vc = fr && (fr.vertices_coords || fr['vertices_coords']);
+      if (Array.isArray(cls) && cls.includes('foldedForm') && Array.isArray(vc)) return vc;
+    }
+    return null;
+  }
+  let showFolded = false; // when a foldedForm frame exists, the viewer can show it instead of the flat net
+
   function buildModel(file) {
-    const vs = (file.vertices_coords || []).map((c, i) => ({
+    const folded = showFolded ? foldedCoords(file) : null;
+    // Show the folded GOAL geometry when toggled (same vertex indexing as the flat frame), else the flat net.
+    const coords = (folded && folded.length === (file.vertices_coords || []).length) ? folded : (file.vertices_coords || []);
+    const vs = coords.map((c, i) => ({
       i, cs: [c[0] || 0, c[1] || 0, c[2] || 0],
     }));
     const fs = (file.faces_vertices || []).map((face, i) => ({
@@ -674,6 +725,14 @@
   // ---- file loading ---------------------------------------------------------
   function loadObject(file, sourceName) {
     currentFile = file;
+    // Default preview is the FLAT 2D cut/fold pattern for ALL models. When the kirigamizer attached a
+    // folded-form goal, offer a toggle to view the folded 3D shape too (the button label is the action).
+    const hasFolded = !!foldedCoords(file);
+    showFolded = false;
+    const shapeGroup = document.getElementById('shape-group');
+    if (shapeGroup) shapeGroup.hidden = !hasFolded;
+    const shapeBtn = document.getElementById('shape-toggle');
+    if (shapeBtn) shapeBtn.textContent = 'Folded';
     frameModel(buildModel(file));
     baseRadius = cam.r;             // record natural framing for the zoom pill
     setCamAxes([1,0,0], [0,1,0]);   // default z-view
@@ -731,6 +790,15 @@
     if (e.target.files[0]) loadFromFile(e.target.files[0]);
   });
 
+  // Flat ⇄ Folded: rebuild from the same file with the other coordinate set, keeping the framing.
+  document.getElementById('shape-toggle').addEventListener('click', () => {
+    if (!currentFile) return;
+    showFolded = !showFolded;
+    document.getElementById('shape-toggle').textContent = showFolded ? 'Flat' : 'Folded'; // label = action
+    frameModel(buildModel(currentFile));
+    render();
+  });
+
   // ---- Kirigamizer host bridge --------------------------------------------
   // The Kirigamizer shell embeds this viewer in an <iframe> and hands it a
   // model with postMessage: { type:'kirigamizer:load', fkld, name } where
@@ -762,9 +830,44 @@
       render();
     });
   });
-  document.getElementById('toggle-sidebar').addEventListener('click', () => {
-    document.querySelector('main').classList.toggle('no-sidebar');
-  });
+  // ---- Sidebar: toolbar toggle + drag-resizer + collapse chevron ----
+  (function () {
+    const mainEl = document.querySelector('main');
+    const chev = document.getElementById('sidebar-collapse');
+    const rez = document.getElementById('pane-resizer');
+    function setSidebar(collapsed) {
+      mainEl.classList.toggle('no-sidebar', collapsed);
+      if (chev) {
+        chev.textContent = collapsed ? '‹' : '›';
+        chev.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
+      }
+    }
+    const toggle = () => setSidebar(!mainEl.classList.contains('no-sidebar'));
+    document.getElementById('toggle-sidebar').addEventListener('click', toggle);
+    if (chev) chev.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+    if (rez) {
+      const clamp = (w) => Math.max(180, Math.min(640, w));
+      let startX = 0, startW = 0;
+      const onMove = (e) => mainEl.style.setProperty('--sidebar-w', clamp(startW + (startX - e.clientX)) + 'px');
+      const onUp = () => {
+        rez.classList.remove('dragging');
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      rez.addEventListener('mousedown', (e) => {
+        if (e.target === chev || mainEl.classList.contains('no-sidebar')) return;
+        e.preventDefault();
+        startX = e.clientX;
+        startW = document.getElementById('sidebar').offsetWidth || 320;
+        rez.classList.add('dragging');
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+      });
+      rez.addEventListener('dblclick', () => {
+        if (!mainEl.classList.contains('no-sidebar')) mainEl.style.setProperty('--sidebar-w', '320px');
+      });
+    }
+  })();
   document.getElementById('prop-select').addEventListener('change', updatePropertyData);
 
   // ---- mouse rotation + pan + wheel zoom ----------------------------------

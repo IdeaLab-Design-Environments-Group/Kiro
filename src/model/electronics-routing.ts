@@ -7,24 +7,27 @@
  * side), the other on face `b` (the `gnd` side); copper terminates on the gray tile at the LED's
  * pinched leg pad.
  *
- * **Organized, in-body bus routing.** Routes run on the {@link faceRouteGraph} (face centroids linked
- * across every interior edge), so copper **stays strictly inside the body** — a trace can cross tiles
- * and gaps but never flies out into empty space the way a free straight line did. From the battery we
- * grow a shortest-path **tree** per net (PWR to every `a` leg, GND to every `b` leg): branches share
- * common trunks instead of fanning out as overlapping wedges, giving the clean bus look of hand-laid
- * copper tape. The two nets are offset to opposite sides of each shared run so they read as parallel
- * strips. Crossings are still allowed (insulated tape underside); no DRC is attempted.
+ * **Corner-hugging bus routing (LED keep-out).** Routes run on the {@link cornerRouteGraph}: copper
+ * waypoints inset onto each gray tile near its corners, linked around every tile and crossing each
+ * hinge **at its corner ends**. So the bus (a) stays strictly inside the body, (b) runs along panel
+ * corners/edges rather than through tile centres, and (c) crosses every gap at its *ends*, leaving the
+ * hinge midpoint — where the LED body and legs sit — clear. From the battery we grow a shortest-path
+ * **tree** per net (PWR to every `a` leg, GND to every `b` leg) so branches share common trunks; the
+ * only copper near a hinge is the one short stub onto each LED's leg pad. The two nets are offset to
+ * opposite sides of each shared run so they read as parallel strips. Crossings between the two nets
+ * are still allowed (insulated tape underside); the enforced rule is the LED keep-out, not net-vs-net.
  */
 import {
   type Circuit,
+  type CornerRouteGraph,
   type GapEdge,
   type GapGraph,
   type Led,
-  type RouteGraph,
   type RoutedCircuit,
   type Trace2D,
   type Vec2,
-  faceRouteGraph,
+  cornerRouteGraph,
+  dist2,
   flatFaces,
   gapForLed,
   gapGraph,
@@ -71,7 +74,7 @@ function placeLeds(graph: GapGraph, leds: Led[], faceCount: number, unreachable:
 export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
   const faces = flatFaces(fold);
   const gaps = gapGraph(fold, faces);
-  const graph = faceRouteGraph(fold, faces);
+  const graph = cornerRouteGraph(fold, faces);
   const centroid = (face: number): Vec2 => faces[face]?.centroid ?? { x: 0, y: 0 };
 
   const ledPoints = circuit.leds.map((led) => {
@@ -90,8 +93,19 @@ export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
     return { ledPoints, batteryPoint, terminals: null, traces, unreachable };
   }
 
+  // A virtual battery source wired to the battery tile's corners — the bus leaves the pack along
+  // panel corners just like every other tile.
+  const batteryNode = graph.pos.length;
+  graph.pos.push(batteryPoint!);
+  graph.adj.push([]);
+  for (const cn of graph.cornerNodes[batteryFace] ?? []) {
+    const w = dist2(batteryPoint!, graph.pos[cn]!);
+    graph.adj[batteryNode]!.push({ to: cn, w });
+    graph.adj[cn]!.push({ to: batteryNode, w });
+  }
+
   const terminals = batteryTerminals(batteryPoint!, placed, graph);
-  planTwoNet(graph, batteryFace, terminals, placed, traces, unreachable);
+  planTwoNet(graph, batteryNode, terminals, placed, traces, unreachable);
   return { ledPoints, batteryPoint, terminals, traces, unreachable };
 }
 
@@ -102,7 +116,7 @@ export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
 function batteryTerminals(
   batteryCentre: Vec2,
   placed: PlacedLed[],
-  graph: RouteGraph,
+  graph: CornerRouteGraph,
 ): { pwr: Vec2; gnd: Vec2 } {
   // Mean LED leg direction → the "out" direction; the terminals straddle its perpendicular.
   let mx = 0, my = 0;
@@ -126,7 +140,7 @@ function batteryTerminals(
  * LED leg pad. LEDs whose leg-tile can't be reached in the body are reported unreachable.
  */
 function planTwoNet(
-  graph: RouteGraph,
+  graph: CornerRouteGraph,
   battery: number,
   terminals: { pwr: Vec2; gnd: Vec2 },
   placed: PlacedLed[],
@@ -136,22 +150,37 @@ function planTwoNet(
   const dj = dijkstra(graph, battery);
   const off = railOffset(graph);
 
-  const pwrTargets: { face: number; leg: Vec2 }[] = [];
-  const gndTargets: { face: number; leg: Vec2 }[] = [];
+  // The reachable corner of `face` nearest the LED's leg pad — copper meets the tile at a corner,
+  // then takes one short stub onto the pad. Null when no corner of the tile is wired to the battery.
+  const cornerNear = (face: number, leg: Vec2): number | null => {
+    let best: number | null = null;
+    let bestD = Infinity;
+    for (const cn of graph.cornerNodes[face] ?? []) {
+      if (dj.dist[cn] === Infinity) continue;
+      const d = dist2(graph.pos[cn]!, leg);
+      if (d < bestD) { bestD = d; best = cn; }
+    }
+    return best;
+  };
+
+  const pwrTargets: { node: number; leg: Vec2 }[] = [];
+  const gndTargets: { node: number; leg: Vec2 }[] = [];
   for (const p of placed) {
-    if (dj.dist[p.aFace] === Infinity || dj.dist[p.bFace] === Infinity) {
+    const aNode = cornerNear(p.aFace, p.aLeg);
+    const bNode = cornerNear(p.bFace, p.bLeg);
+    if (aNode == null || bNode == null) {
       unreachable.push(p.index); // a leg tile is cut off from the battery within the body
       continue;
     }
-    pwrTargets.push({ face: p.aFace, leg: p.aLeg });
-    gndTargets.push({ face: p.bFace, leg: p.bLeg });
+    pwrTargets.push({ node: aNode, leg: p.aLeg });
+    gndTargets.push({ node: bNode, leg: p.bLeg });
   }
   emitTree(graph, dj, battery, terminals.pwr, pwrTargets, "pwr", +off, traces);
   emitTree(graph, dj, battery, terminals.gnd, gndTargets, "gnd", -off, traces);
 }
 
 /** Lateral offset (flat mm) that separates the PWR/GND strips — relative to the pattern size. */
-function railOffset(graph: RouteGraph): number {
+function railOffset(graph: CornerRouteGraph): number {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of graph.pos) {
     if (p.x < minX) minX = p.x;
@@ -169,11 +198,11 @@ function railOffset(graph: RouteGraph): number {
  * battery centroid, so the tape visibly leaves its `+`/`−` square.
  */
 function emitTree(
-  graph: RouteGraph,
+  graph: CornerRouteGraph,
   dj: Dijkstra,
   battery: number,
   anchor: Vec2,
-  targets: { face: number; leg: Vec2 }[],
+  targets: { node: number; leg: Vec2 }[],
   net: "pwr" | "gnd",
   off: number,
   traces: Trace2D[],
@@ -181,7 +210,7 @@ function emitTree(
   const posOf = (node: number): Vec2 => (node === battery ? anchor : graph.pos[node]!);
   const edges = new Map<string, [number, number]>();
   for (const t of targets) {
-    let cur = t.face;
+    let cur = t.node;
     while (cur !== battery) {
       const prev = dj.prev[cur]!;
       if (prev === -1) break;
@@ -193,9 +222,9 @@ function emitTree(
   for (const [, [u, v]] of edges) {
     traces.push({ net, points: offsetSeg(posOf(u), posOf(v), off) });
   }
-  // Stubs onto the actual leg pads (so copper reaches each LED's tile, not just the centroid).
+  // One short stub from the reached corner onto the LED's leg pad (the only copper near a hinge).
   for (const t of targets) {
-    traces.push({ net, points: offsetSeg(posOf(t.face), t.leg, off) });
+    traces.push({ net, points: offsetSeg(posOf(t.node), t.leg, off) });
   }
 }
 
@@ -213,7 +242,7 @@ interface Dijkstra {
 }
 
 /** Single-source shortest paths over the route graph (binary-heap Dijkstra). */
-function dijkstra(graph: RouteGraph, source: number): Dijkstra {
+function dijkstra(graph: CornerRouteGraph, source: number): Dijkstra {
   const n = graph.pos.length;
   const dist = new Array<number>(n).fill(Infinity);
   const prev = new Array<number>(n).fill(-1);

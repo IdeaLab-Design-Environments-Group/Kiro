@@ -1,24 +1,17 @@
 /**
- * Old-West clapboard CHURCH (nave) → public/examples/church.stl: a steep TRUNCATED-gable chapel —
- * the two roof slopes meet a FLAT RIDGE PLATFORM that is the PLACE FOR THE TOWER. Sized to sit with
- * the larger Western-town buildings (footprint ≈ hotel/general-store). Unit scale, ASCII STL, z-up.
+ * Bell TOWER piece → public/examples/church-tower.stl: a tall narrow steep-gable tower (belfry walls +
+ * a steep spire roof) that folds on its own and stands on the flat platform of church.stl. Unit scale,
+ * ASCII STL, z-up. 2-piece companion to gen-church.mjs (a free-standing tower can't be part of a single
+ * self-folding sheet, so the steeple is a separate fold-and-stack piece).
  *
- * The bell tower is a SEPARATE foldable piece (`church-tower.stl`) that you fold and stand on this
- * platform — a free-standing tower can't be part of a single self-folding sheet (it leaves a seam /
- * collapses on free-fold), so the 2-piece church is how you get a clean folding church WITH a steeple.
- * This nave alone is a single convex massing, so it folds to a CLEAN CLOSED shape (d_H≈0). Winding is
- * fixed globally OUTWARD by flood-fill so the app preview doesn't cull.
- *
- * Run:  node scripts/gen-church.mjs   (then node scripts/gen-church-tower.mjs for the tower)
+ * Run:  node scripts/gen-church-tower.mjs
  */
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-// ---- dimensions (unit scale, z-up) — bigger footprint, flat platform for the tower --------------
-const W = 1.45, D = 1.4;          // nave footprint (x, y)
-const HE = 0.78, H1 = 1.4;        // eave + flat ridge platform height (steep gable)
-const FT = 0.6;                   // platform width (x) — the flat place the tower stands on
-const xL = W / 2 - FT / 2, xR = W / 2 + FT / 2;
+// ---- dimensions — sits on the nave's ~0.6-wide platform; tall + steep so it reads as a steeple ----
+const W = 0.5, D = 0.5;           // tower footprint (square)
+const HE = 1.05, HR = 1.85;       // tall belfry walls + steep spire ridge
 
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -48,7 +41,6 @@ function earClip(poly) {
 }
 const gXZ = (poly, y) => { for (const [a, b, c] of earClip(poly)) addTri([poly[a][0], y, poly[a][1]], [poly[b][0], y, poly[b][1]], [poly[c][0], y, poly[c][1]]); };
 
-/** Globally consistent OUTWARD winding (per-face heuristics fail; the app preview backface-culls). */
 function orientOutward(rawTris) {
   const key = (p) => p.map((v) => Math.round(v * 1e5)).join(",");
   const vm = new Map(), V = [];
@@ -75,20 +67,18 @@ function orientOutward(rawTris) {
   return F.map((f) => [V[f[0]], V[f[1]], V[f[2]]]);
 }
 
-// ---- nave: floor + side walls + truncated-gable ends + two roof slopes + flat top platform -------
-quad([0, 0, 0], [W, 0, 0], [W, D, 0], [0, D, 0]);                       // floor
-quad([0, 0, 0], [0, 0, HE], [0, D, HE], [0, D, 0]);                     // left wall  (x=0)
-quad([W, 0, 0], [W, D, 0], [W, D, HE], [W, 0, HE]);                     // right wall (x=W)
-const gable = [[0, 0], [W, 0], [W, HE], [xR, H1], [xL, H1], [0, HE]];   // truncated-gable profile
-gXZ(gable, 0);                                                         // front gable end (y=0)
-gXZ(gable, D);                                                         // back gable end (y=D)
-quad([0, 0, HE], [xL, 0, H1], [xL, D, H1], [0, D, HE]);                // left roof slope
-quad([xR, 0, H1], [W, 0, HE], [W, D, HE], [xR, D, H1]);                // right roof slope
-quad([xL, 0, H1], [xR, 0, H1], [xR, D, H1], [xL, D, H1]);              // FLAT TOP platform (place for the tower)
+// ---- tower massing: floor + four walls/gable-ends + two roof slopes (steep spire) ----------------
+quad([0, 0, 0], [W, 0, 0], [W, D, 0], [0, D, 0]);
+quad([0, 0, 0], [0, 0, HE], [0, D, HE], [0, D, 0]);
+quad([W, 0, 0], [W, D, 0], [W, D, HE], [W, 0, HE]);
+const gable = [[0, 0], [W, 0], [W, HE], [W / 2, HR], [0, HE]];
+gXZ(gable, 0);
+gXZ(gable, D);
+quad([0, 0, HE], [W / 2, 0, HR], [W / 2, D, HR], [0, D, HE]);
+quad([W / 2, 0, HR], [W, 0, HE], [W, D, HE], [W / 2, D, HR]);
 
-// ---- write ASCII STL (globally-consistent outward normals) --------------------------------------
 const oriented = orientOutward(tris);
-const out = ["solid church"];
+const out = ["solid church-tower"];
 for (const [a, b, c] of oriented) {
   let n = cross(sub(b, a), sub(c, a));
   const l = Math.hypot(...n) || 1; n = [n[0] / l, n[1] / l, n[2] / l];
@@ -96,6 +86,6 @@ for (const [a, b, c] of oriented) {
     `vertex ${a[0]} ${a[1]} ${a[2]}`, `vertex ${b[0]} ${b[1]} ${b[2]}`, `vertex ${c[0]} ${c[1]} ${c[2]}`,
     "endloop", "endfacet");
 }
-out.push("endsolid church");
-writeFileSync(resolve(import.meta.dirname, "..", "public/examples/church.stl"), out.join("\n") + "\n");
-console.log(`church.stl: ${oriented.length} facets — nave w/ flat platform (place for tower), ${W}×${D}×${H1}; folds clean & closed`);
+out.push("endsolid church-tower");
+writeFileSync(resolve(import.meta.dirname, "..", "public/examples/church-tower.stl"), out.join("\n") + "\n");
+console.log(`church-tower.stl: ${oriented.length} facets — bell tower (${W}×${D}×${HR}); stands on church.stl's platform`);

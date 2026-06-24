@@ -263,6 +263,10 @@
       <span class="lbl">Toggle:</span>
       <!-- toggles inserted by JS -->
     </div>
+    <div class="group" id="shape-group" hidden>
+      <span class="lbl">Shape:</span>
+      <button id="shape-toggle" title="Switch between the flat cut pattern and the folded form">Folded</button>
+    </div>
     <div class="group">
       <span class="lbl">View:</span>
       <button data-view="x">x</button>
@@ -367,8 +371,24 @@
   }
 
   // ---- model build: derive vs/es/fs from a parsed FKLD/FOLD file -----------
+  // The folded-form goal coords the kirigamizer emits (a `foldedForm` file_frame), or null.
+  function foldedCoords(file) {
+    const frames = file && file.file_frames;
+    if (!Array.isArray(frames)) return null;
+    for (const fr of frames) {
+      const cls = fr && (fr.frame_classes || fr['frame_classes']);
+      const vc = fr && (fr.vertices_coords || fr['vertices_coords']);
+      if (Array.isArray(cls) && cls.includes('foldedForm') && Array.isArray(vc)) return vc;
+    }
+    return null;
+  }
+  let showFolded = false; // when a foldedForm frame exists, the viewer can show it instead of the flat net
+
   function buildModel(file) {
-    const vs = (file.vertices_coords || []).map((c, i) => ({
+    const folded = showFolded ? foldedCoords(file) : null;
+    // Show the folded GOAL geometry when toggled (same vertex indexing as the flat frame), else the flat net.
+    const coords = (folded && folded.length === (file.vertices_coords || []).length) ? folded : (file.vertices_coords || []);
+    const vs = coords.map((c, i) => ({
       i, cs: [c[0] || 0, c[1] || 0, c[2] || 0],
     }));
     const fs = (file.faces_vertices || []).map((face, i) => ({
@@ -705,6 +725,14 @@
   // ---- file loading ---------------------------------------------------------
   function loadObject(file, sourceName) {
     currentFile = file;
+    // Default preview is the FLAT 2D cut/fold pattern for ALL models. When the kirigamizer attached a
+    // folded-form goal, offer a toggle to view the folded 3D shape too (the button label is the action).
+    const hasFolded = !!foldedCoords(file);
+    showFolded = false;
+    const shapeGroup = document.getElementById('shape-group');
+    if (shapeGroup) shapeGroup.hidden = !hasFolded;
+    const shapeBtn = document.getElementById('shape-toggle');
+    if (shapeBtn) shapeBtn.textContent = 'Folded';
     frameModel(buildModel(file));
     baseRadius = cam.r;             // record natural framing for the zoom pill
     setCamAxes([1,0,0], [0,1,0]);   // default z-view
@@ -760,6 +788,15 @@
 
   document.getElementById('file-input').addEventListener('change', (e) => {
     if (e.target.files[0]) loadFromFile(e.target.files[0]);
+  });
+
+  // Flat ⇄ Folded: rebuild from the same file with the other coordinate set, keeping the framing.
+  document.getElementById('shape-toggle').addEventListener('click', () => {
+    if (!currentFile) return;
+    showFolded = !showFolded;
+    document.getElementById('shape-toggle').textContent = showFolded ? 'Flat' : 'Folded'; // label = action
+    frameModel(buildModel(currentFile));
+    render();
   });
 
   // ---- Kirigamizer host bridge --------------------------------------------

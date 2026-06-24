@@ -379,6 +379,87 @@ export function faceRouteGraph(fold: FoldFile, faces: FlatFace[] = flatFaces(fol
   return { faceCount: faces.length, pos, adj };
 }
 
+/**
+ * A **corner** routing graph: per-(face, corner) waypoints inset a little onto each gray tile, linked
+ * around each tile's boundary and across each gap **at its shared corners**. Routing on this keeps
+ * copper hugging the panel corners/edges and crossing every hinge at its *ends* — so the hinge
+ * midpoint, where the LED body + legs sit, stays clear. `cornerNodes[face]` lists that face's corner
+ * node ids in face-vertex order.
+ */
+export interface CornerRouteGraph {
+  faceCount: number;
+  pos: Vec2[];
+  adj: { to: number; w: number }[][];
+  cornerNodes: number[][];
+}
+
+/** Move `p` toward `g`, but never past ~halfway — keeps the waypoint near its corner, on the gray. */
+function insetToward(p: Vec2, g: Vec2, d: number): Vec2 {
+  const dx = g.x - p.x, dy = g.y - p.y;
+  const l = Math.hypot(dx, dy);
+  if (l < 1e-9 || d <= 0) return { x: p.x, y: p.y };
+  const t = Math.min(d, l * 0.45) / l;
+  return { x: p.x + dx * t, y: p.y + dy * t };
+}
+
+export function cornerRouteGraph(
+  fold: FoldFile,
+  faces: FlatFace[] = flatFaces(fold),
+  gap: number = TILE_INSET_FRAC,
+): CornerRouteGraph {
+  const pos: Vec2[] = [];
+  const adj: { to: number; w: number }[][] = [];
+  const cornerNodes: number[][] = [];
+  const nodeAt = new Map<string, number>(); // `${face}_${vertId}` -> node id
+
+  const addNode = (p: Vec2): number => {
+    const n = pos.length;
+    pos.push(p);
+    adj.push([]);
+    return n;
+  };
+  const link = (u: number, v: number): void => {
+    const w = dist2(pos[u]!, pos[v]!);
+    adj[u]!.push({ to: v, w });
+    adj[v]!.push({ to: u, w });
+  };
+
+  // 1) One corner waypoint per (face, corner), inset toward the tile centroid so copper sits on the
+  //    gray (inside the pinched dents); link a tile's corners around its boundary.
+  faces.forEach((f, fi) => {
+    if (f.poly.length < 3) {
+      cornerNodes.push([]);
+      return;
+    }
+    const inset = tilePinch(f.poly, gap);
+    const nodes: number[] = [];
+    f.verts.forEach((vid, k) => {
+      const node = addNode(insetToward(f.poly[k]!, f.centroid, inset));
+      nodeAt.set(`${fi}_${vid}`, node);
+      nodes.push(node);
+    });
+    for (let k = 0; k < nodes.length; k++) link(nodes[k]!, nodes[(k + 1) % nodes.length]!);
+    cornerNodes.push(nodes);
+  });
+
+  // 2) Cross every interior edge AT ITS CORNERS: link the two tiles' corner waypoints at each shared
+  //    vertex, so a trace hops tile→tile at the edge ends. This includes F (facet) diagonals — a quad
+  //    split by a triangulation is one rigid panel and must stay connected — while still crossing real
+  //    hinges at their *corners*, never their midpoint (where the LED sits).
+  const shared = sharedEdges(faces);
+  for (const [, rec] of shared) {
+    if (rec.faces.length !== 2) continue; // boundary / non-manifold — nothing to cross to
+    const [fA, fB] = rec.faces as [number, number];
+    for (const vid of [rec.a, rec.b]) {
+      const na = nodeAt.get(`${fA}_${vid}`);
+      const nb = nodeAt.get(`${fB}_${vid}`);
+      if (na != null && nb != null) link(na, nb);
+    }
+  }
+
+  return { faceCount: faces.length, pos, adj, cornerNodes };
+}
+
 /** The gap that an LED straddles (matching its unordered face pair), or null if that gap is gone. */
 export function gapForLed(gaps: GapEdge[], led: Led): GapEdge | null {
   return (

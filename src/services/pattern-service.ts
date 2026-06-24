@@ -38,11 +38,13 @@ export function kirigamizeMesh(text: string, ext: "obj" | "stl", sourceName: str
   const r = result.report;
   const cuts = result.plan.cutEdges.length + result.unfold.reliefEdges.length;
   const vents = result.unfold.vents.length;
+  // A pattern that doesn't free-fold is still usable: the viewer shows it at its folded GOAL pose
+  // (a "guided" model). So that case is informational, not an error — only an outright verify/pipeline
+  // failure (no report) is a problem.
   const verdict = r
-    ? `${r.converged ? "folds from flat" : "does NOT fold from flat"}: ` +
-      `d_H = ${r.foldFromFlat.dH.toFixed(2)} mm (ε = ${r.epsilon.toFixed(2)} mm), ` +
-      `strain ${(100 * r.foldFromFlat.meanStrain).toFixed(1)}% · ` +
-      `equilibrium d_H = ${r.equilibrium.dH.toFixed(2)} mm, ${r.attempts} attempt(s)`
+    ? r.converged
+      ? `folds from flat (d_H = ${r.foldFromFlat.dH.toFixed(2)} mm, ε = ${r.epsilon.toFixed(2)} mm)`
+      : `shown at its folded form — guided (won't self-fold from flat; d_H = ${r.foldFromFlat.dH.toFixed(2)} mm)`
     : "unverified";
   return {
     fkld: result.fkld,
@@ -50,7 +52,7 @@ export function kirigamizeMesh(text: string, ext: "obj" | "stl", sourceName: str
     summary:
       `Kirigamized "${sourceName}" → ${cuts} cuts${vents ? `, ${vents} vent(s)` : ""}, ` +
       `${result.sheet.faces.length} faces — ${verdict}.`,
-    ok: !(r && !r.converged),
+    ok: true,
   };
 }
 
