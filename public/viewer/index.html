@@ -36,45 +36,84 @@
       font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif;
       color: var(--ink);
       background: var(--bg);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
     }
     header {
       padding: 8px 16px;
       border-bottom: 1px solid var(--border);
       background: var(--panel);
       display: flex; align-items: center; gap: 12px;
+      flex: 0 0 auto;
     }
     header h1 { font-size: 14px; margin: 0; font-weight: 600; }
     header h1 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
     .toolbar {
-      padding: 6px 16px;
+      padding: 9px 16px;
       border-bottom: 1px solid var(--border);
       background: var(--panel);
-      display: flex; flex-wrap: wrap; gap: 6px 18px;
+      display: flex; flex-wrap: wrap; gap: 8px 16px;
       align-items: center;
       font-size: 12px;
+      flex: 0 0 auto;
     }
-    .toolbar > .group { display: flex; gap: 4px; align-items: center; }
-    .toolbar > .group > .lbl { color: var(--muted); margin-right: 2px; }
+    .toolbar > .group { display: flex; gap: 5px; align-items: center; }
+    .toolbar > .group > .lbl {
+      color: var(--muted); margin-right: 4px;
+      font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    /* Soft rounded controls (buttons / selects / file picker) */
     .toolbar select, .toolbar input[type=file], .toolbar button {
       font: inherit;
-      padding: 3px 8px;
+      font-size: 12px;
+      padding: 4px 11px;
       border: 1px solid var(--border);
-      background: var(--bg);
+      background: #fff;
       color: var(--ink);
-      border-radius: 3px;
+      border-radius: 7px;
       cursor: pointer;
+      transition: background 0.13s, border-color 0.13s, box-shadow 0.13s;
     }
-    .toolbar button:hover, .toolbar select:hover { background: #f0ecdd; }
+    .toolbar button:hover, .toolbar select:hover, .toolbar input[type=file]:hover {
+      background: #f6f3ec; border-color: #c9c3b0;
+    }
+    .toolbar button:active { transform: translateY(0.5px); }
+    .toolbar button:focus-visible, .toolbar select:focus-visible {
+      outline: 2px solid rgba(31, 111, 235, 0.45); outline-offset: 1px;
+    }
+    .toolbar input[type=file]::file-selector-button {
+      font: inherit; font-size: 11px; margin-right: 8px;
+      padding: 3px 9px; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg); color: var(--ink); cursor: pointer;
+      transition: background 0.13s;
+    }
+    .toolbar input[type=file]::file-selector-button:hover { background: #efe9da; }
+    /* View x/y/z + Zoom +/−/Fit read as compact buttons */
+    .toolbar button[data-view], .toolbar #zoom-in, .toolbar #zoom-out, .toolbar #zoom-fit {
+      min-width: 30px; padding: 4px 8px; text-align: center; font-weight: 600;
+    }
+    /* Toggle chips — pill toggles, blue when on */
     .toolbar label.toggle {
-      padding: 2px 6px;
+      padding: 4px 11px;
       border: 1px solid var(--border);
-      border-radius: 3px;
-      background: var(--bg);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      font-weight: 500;
       cursor: pointer;
       user-select: none;
       display: inline-flex; align-items: center; gap: 4px;
+      transition: background 0.13s, border-color 0.13s, color 0.13s, box-shadow 0.13s;
     }
-    .toolbar label.toggle.on { background: #2666c4; border-color: #1c4d99; color: white; }
+    .toolbar label.toggle:hover {
+      background: #f6f3ec; border-color: #c9c3b0; color: var(--ink);
+    }
+    .toolbar label.toggle.on {
+      background: #1f6feb; border-color: #1f6feb; color: #fff;
+      box-shadow: 0 1px 2px rgba(31, 111, 235, 0.3);
+    }
     .toolbar label.toggle input { display: none; }
     .toolbar #prop-data {
       max-width: 480px; overflow: hidden; text-overflow: ellipsis;
@@ -85,10 +124,38 @@
     }
     main {
       display: grid;
-      grid-template-columns: 1fr 320px;
-      height: calc(100vh - 53px - 38px);  /* header + toolbar */
+      grid-template-columns: minmax(0, 1fr) 12px var(--sidebar-w, 320px);
+      flex: 1 1 auto;
+      min-height: 0;  /* fill the space the removed status bar used to take */
     }
-    main.no-sidebar { grid-template-columns: 1fr 0; }
+    main.no-sidebar { grid-template-columns: minmax(0, 1fr) 26px 0; }
+    #pane-resizer {
+      position: relative;
+      align-self: stretch;
+      display: flex; align-items: center; justify-content: center;
+      cursor: col-resize;
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+    }
+    #pane-resizer::before {
+      content: ""; width: 3px; height: 90%;
+      border-radius: 3px; background: transparent;
+      transition: background 0.15s;
+    }
+    #pane-resizer:hover::before, #pane-resizer.dragging::before { background: #c9c3b0; }
+    main.no-sidebar #pane-resizer { cursor: default; }
+    #sidebar-collapse {
+      position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+      width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
+      padding: 0; font: inherit; font-size: 14px; line-height: 1;
+      color: var(--muted); background: var(--panel);
+      border: 1px solid var(--border); border-radius: 50%;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+      cursor: pointer; z-index: 3;
+      transition: color 0.13s, border-color 0.13s;
+    }
+    #sidebar-collapse:hover { color: #1f6feb; border-color: #c9c3b0; }
     .canvas-wrap {
       position: relative;
       background:
@@ -104,23 +171,26 @@
     svg { width: 100%; height: 100%; display: block; user-select: none; }
     aside {
       background: var(--panel);
-      border-left: 1px solid var(--border);
       padding: 14px 18px;
       overflow-y: auto;
       font-size: 12px;
     }
     main.no-sidebar aside { display: none; }
     aside h2 {
-      font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
-      color: var(--muted); margin: 16px 0 4px; font-weight: 600;
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+      color: #1741c4; margin: 16px 0 5px; font-weight: 700;
     }
     aside h2:first-child { margin-top: 0; }
     aside .row {
       display: flex; justify-content: space-between;
-      padding: 1px 0; border-bottom: 1px dotted var(--border);
+      gap: 16px; align-items: baseline;
+      padding: 4px 0; border-bottom: 1px solid #efece1;
     }
-    aside .row .label { color: var(--muted); }
-    aside .row .value { font-variant-numeric: tabular-nums; }
+    aside .row .label { color: var(--muted); flex: 0 0 auto; white-space: nowrap; }
+    aside .row .value {
+      text-align: right; font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere; min-width: 0;
+    }
     aside pre {
       background: var(--bg); border: 1px solid var(--border);
       border-radius: 3px; padding: 6px;
@@ -138,10 +208,6 @@
     .swatch { display: inline-block; width: 18px; height: 2px; vertical-align: middle; margin-right: 4px; }
     .swatch.dashed { background: repeating-linear-gradient(90deg, currentColor 0, currentColor 2px, transparent 2px, transparent 4px); }
     .legend-item { display: flex; align-items: center; padding: 1px 0; font-size: 10px; }
-    #status {
-      color: var(--muted); font-size: 11px; padding: 3px 16px;
-      background: var(--panel); border-top: 1px solid var(--border);
-    }
     /* All SVG primitives use vector-effect: non-scaling-stroke so the
        stroke widths and dasharrays below are interpreted in CSS pixels,
        not viewBox user units. Without this the stroke widths balloon to
@@ -229,13 +295,9 @@
 
   <main>
     <div class="canvas-wrap" id="canvas-wrap"><svg id="canvas"></svg></div>
+    <div id="pane-resizer"><button id="sidebar-collapse" type="button" title="Hide sidebar">›</button></div>
     <aside id="sidebar"></aside>
   </main>
-  <div id="status">
-    <span id="status-text">Ready.</span>
-    <span style="margin-left:14px;color:var(--muted)">Zoom: <span id="zoom-pill" class="pill" style="margin-left:2px">100%</span></span>
-    <span style="margin-left:14px;color:var(--muted)">Drag: rotate · Shift-drag / right-drag: pan · Wheel: zoom · +/− /0 keys</span>
-  </div>
 
   <script>
   // ===========================================================================
@@ -731,9 +793,44 @@
       render();
     });
   });
-  document.getElementById('toggle-sidebar').addEventListener('click', () => {
-    document.querySelector('main').classList.toggle('no-sidebar');
-  });
+  // ---- Sidebar: toolbar toggle + drag-resizer + collapse chevron ----
+  (function () {
+    const mainEl = document.querySelector('main');
+    const chev = document.getElementById('sidebar-collapse');
+    const rez = document.getElementById('pane-resizer');
+    function setSidebar(collapsed) {
+      mainEl.classList.toggle('no-sidebar', collapsed);
+      if (chev) {
+        chev.textContent = collapsed ? '‹' : '›';
+        chev.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
+      }
+    }
+    const toggle = () => setSidebar(!mainEl.classList.contains('no-sidebar'));
+    document.getElementById('toggle-sidebar').addEventListener('click', toggle);
+    if (chev) chev.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+    if (rez) {
+      const clamp = (w) => Math.max(180, Math.min(640, w));
+      let startX = 0, startW = 0;
+      const onMove = (e) => mainEl.style.setProperty('--sidebar-w', clamp(startW + (startX - e.clientX)) + 'px');
+      const onUp = () => {
+        rez.classList.remove('dragging');
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      rez.addEventListener('mousedown', (e) => {
+        if (e.target === chev || mainEl.classList.contains('no-sidebar')) return;
+        e.preventDefault();
+        startX = e.clientX;
+        startW = document.getElementById('sidebar').offsetWidth || 320;
+        rez.classList.add('dragging');
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+      });
+      rez.addEventListener('dblclick', () => {
+        if (!mainEl.classList.contains('no-sidebar')) mainEl.style.setProperty('--sidebar-w', '320px');
+      });
+    }
+  })();
   document.getElementById('prop-select').addEventListener('change', updatePropertyData);
 
   // ---- mouse rotation + pan + wheel zoom ----------------------------------
@@ -788,8 +885,10 @@
     updateZoomPill();
   }
   function updateZoomPill() {
+    const el = document.getElementById('zoom-pill');
+    if (!el) return;
     const pct = baseRadius ? Math.round((baseRadius / cam.r) * 100) : 100;
-    document.getElementById('zoom-pill').textContent = `${pct}%`;
+    el.textContent = `${pct}%`;
   }
 
   // Mouse drag: left button rotates (FOLD-style); shift-drag (or middle / right

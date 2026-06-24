@@ -87,11 +87,36 @@ export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
   const unreachable: number[] = [];
   const placed = placeLeds(gaps, circuit.leds, faces.length, unreachable);
   if (batteryFace == null || placed.length === 0) {
-    return { ledPoints, batteryPoint, traces, unreachable };
+    return { ledPoints, batteryPoint, terminals: null, traces, unreachable };
   }
 
-  planTwoNet(graph, batteryFace, placed, traces, unreachable);
-  return { ledPoints, batteryPoint, traces, unreachable };
+  const terminals = batteryTerminals(batteryPoint!, placed, graph);
+  planTwoNet(graph, batteryFace, terminals, placed, traces, unreachable);
+  return { ledPoints, batteryPoint, terminals, traces, unreachable };
+}
+
+/**
+ * The battery's two terminal pads: offset to either side of the battery centre, perpendicular to the
+ * direction the wiring heads (toward the LEDs), so PWR (+) and GND (−) leave from distinct squares.
+ */
+function batteryTerminals(
+  batteryCentre: Vec2,
+  placed: PlacedLed[],
+  graph: RouteGraph,
+): { pwr: Vec2; gnd: Vec2 } {
+  // Mean LED leg direction → the "out" direction; the terminals straddle its perpendicular.
+  let mx = 0, my = 0;
+  for (const p of placed) { mx += (p.aLeg.x + p.bLeg.x) / 2; my += (p.aLeg.y + p.bLeg.y) / 2; }
+  mx = mx / placed.length - batteryCentre.x;
+  my = my / placed.length - batteryCentre.y;
+  let ax = -my, ay = mx; // perpendicular to the out-direction
+  const al = Math.hypot(ax, ay);
+  if (al < 1e-6) { ax = 1; ay = 0; } else { ax /= al; ay /= al; }
+  const half = railOffset(graph) * 4; // clearly separate squares (railOffset is the rail spacing)
+  return {
+    pwr: { x: batteryCentre.x + ax * half, y: batteryCentre.y + ay * half },
+    gnd: { x: batteryCentre.x - ax * half, y: batteryCentre.y - ay * half },
+  };
 }
 
 /**
@@ -103,6 +128,7 @@ export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
 function planTwoNet(
   graph: RouteGraph,
   battery: number,
+  terminals: { pwr: Vec2; gnd: Vec2 },
   placed: PlacedLed[],
   traces: Trace2D[],
   unreachable: number[],
@@ -120,8 +146,8 @@ function planTwoNet(
     pwrTargets.push({ face: p.aFace, leg: p.aLeg });
     gndTargets.push({ face: p.bFace, leg: p.bLeg });
   }
-  emitTree(graph, dj, battery, pwrTargets, "pwr", +off, traces);
-  emitTree(graph, dj, battery, gndTargets, "gnd", -off, traces);
+  emitTree(graph, dj, battery, terminals.pwr, pwrTargets, "pwr", +off, traces);
+  emitTree(graph, dj, battery, terminals.gnd, gndTargets, "gnd", -off, traces);
 }
 
 /** Lateral offset (flat mm) that separates the PWR/GND strips — relative to the pattern size. */
@@ -137,16 +163,22 @@ function railOffset(graph: RouteGraph): number {
   return diag * 0.006;
 }
 
-/** Emit a net's shortest-path tree (deduped edges) + leg stubs, each offset perpendicular by `off`. */
+/**
+ * Emit a net's shortest-path tree (deduped edges) + leg stubs, each offset perpendicular by `off`.
+ * Edges touching the battery node start at `anchor` (the net's own terminal pad) instead of the
+ * battery centroid, so the tape visibly leaves its `+`/`−` square.
+ */
 function emitTree(
   graph: RouteGraph,
   dj: Dijkstra,
   battery: number,
+  anchor: Vec2,
   targets: { face: number; leg: Vec2 }[],
   net: "pwr" | "gnd",
   off: number,
   traces: Trace2D[],
 ): void {
+  const posOf = (node: number): Vec2 => (node === battery ? anchor : graph.pos[node]!);
   const edges = new Map<string, [number, number]>();
   for (const t of targets) {
     let cur = t.face;
@@ -159,11 +191,11 @@ function emitTree(
     }
   }
   for (const [, [u, v]] of edges) {
-    traces.push({ net, points: offsetSeg(graph.pos[u]!, graph.pos[v]!, off) });
+    traces.push({ net, points: offsetSeg(posOf(u), posOf(v), off) });
   }
   // Stubs onto the actual leg pads (so copper reaches each LED's tile, not just the centroid).
   for (const t of targets) {
-    traces.push({ net, points: offsetSeg(graph.pos[t.face]!, t.leg, off) });
+    traces.push({ net, points: offsetSeg(posOf(t.face), t.leg, off) });
   }
 }
 

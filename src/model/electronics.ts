@@ -65,6 +65,8 @@ export interface RoutedCircuit {
   ledPoints: Vec2[];
   /** Centroid (flat mm) of the battery face, or null. */
   batteryPoint: Vec2 | null;
+  /** The battery's two terminal pads (flat mm): PWR (+) and GND (−) — each net's tape leaves its own. */
+  terminals: { pwr: Vec2; gnd: Vec2 } | null;
   traces: Trace2D[];
   /** Indices into `circuit.leds` the planner could not connect to the battery. */
   unreachable: number[];

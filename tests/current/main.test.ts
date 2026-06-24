@@ -34,6 +34,10 @@ vi.mock("../../src/view/viewer-frame.js", () => ({
   },
 }));
 
+vi.mock("../../src/view/layout.js", () => ({
+  installResizableLayout: vi.fn(),
+}));
+
 vi.mock("../../src/view/sim-modal.js", () => ({
   SimModal: class SimModal {
     mountTrigger = vi.fn(() => state.viewCalls.push("sim.mountTrigger"));

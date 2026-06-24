@@ -75,23 +75,20 @@ export class ElectronicsModal {
     this.overlay.innerHTML = `
       <div class="sim-modal el-modal" role="dialog" aria-modal="true" aria-label="LED electronics editor">
         <header class="sim-modal-header">
-          <span class="sim-modal-title">Electronics — flat printed pattern; click a gap to bridge it with an LED</span>
+          <span class="sim-modal-title">Electronics</span>
           <button type="button" class="sim-modal-close" aria-label="Close">×</button>
         </header>
         <div class="sim-modal-body el-body">
           <div class="el-toolbar">
             <span class="el-group">
-              <span class="el-label">Place</span>
-              <button type="button" class="el-tool" data-tool="led" title="LED (click a gap between two tiles)">LED</button>
-              <button type="button" class="el-tool" data-tool="battery" title="Battery (click a tile)">Battery</button>
+              <button type="button" class="el-tool" data-tool="led" title="Add an LED — click a gap between two tiles">LED</button>
+              <button type="button" class="el-tool" data-tool="battery" title="Place the battery — click a tile">Battery</button>
             </span>
             <span class="el-group">
-              <span class="el-label">Routing</span>
               <button type="button" class="el-route" title="Auto-route copper tape from the battery to every LED">Auto-route</button>
-              <button type="button" class="el-clear">Clear</button>
+              <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear</button>
             </span>
             <span class="el-group el-view-group">
-              <span class="el-label">View</span>
               <button type="button" class="el-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
               <button type="button" class="el-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
               <button type="button" class="el-fit" title="Fit to screen">Fit</button>
@@ -100,18 +97,16 @@ export class ElectronicsModal {
           <div class="el-canvas-wrap">
             <svg class="el-svg" xmlns="${SVG_NS}" aria-label="Electronics flat-pattern canvas"></svg>
           </div>
-          <p class="el-legend">
-            <span class="el-key el-key-led">● LED (legs on two tiles)</span>
-            <span class="el-key el-key-batt">▮ battery</span>
-            <span class="el-key el-key-pwr">▬ PWR tape</span>
-            <span class="el-key el-key-gnd">▬ GND tape</span>
-            &nbsp;· gray = printed tiles, light = cloth backing; tape crosses freely (insulated back)
-          </p>
+          <div class="el-footer-row">
+            <p class="el-legend">
+              <span class="el-key el-key-led">● LED</span>
+              <span class="el-key el-key-batt">▮ Battery</span>
+              <span class="el-key el-key-pwr">▬ PWR</span>
+              <span class="el-key el-key-gnd">▬ GND</span>
+            </p>
+            <span class="sim-status el-status"></span>
+          </div>
         </div>
-        <footer class="sim-modal-footer">
-          <span class="sim-status el-status"></span>
-          <span class="el-hint">Scroll to zoom · drag to pan · <strong>Auto-route</strong> to wire · export from <strong>Export SVG</strong>.</span>
-        </footer>
       </div>
     `;
     document.body.appendChild(this.overlay);
@@ -400,35 +395,54 @@ export class ElectronicsModal {
         .join(" ");
       parts.push(`<path d="${d}" class="el-tape el-tape-${tr.net}" />`);
     }
-    // LEDs straddling a gap: a body at the hinge midpoint with a leg landing on each gray tile.
+    // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
+    // pad toward face `b` — set a controlled, noticeable distance apart and bridged by the LED chip.
     // The router reports unreachable LEDs by their index in circuit.leds.
     const unreachable = new Set(this.routed?.unreachable ?? []);
     this.circuit.leds.forEach((led, i) => {
       const gap = gapForLed(this.gaps, led);
       if (!gap) return;
-      const a = this.tp(gap.legA);
-      const b = this.tp(gap.legB);
-      const c = this.tp(gap.point);
       const orphan = unreachable.has(i);
-      const cls = orphan ? "el-led el-led-orphan" : "el-led";
-      const legCls = orphan ? "el-led-leg el-led-leg-orphan" : "el-led-leg";
+      const mid = gap.point;
+      // PWR follows the LED's `a` face, GND its `b` face.
+      const pwrLeg = gap.faceA === led.a ? gap.legA : gap.legB;
+      const gndLeg = gap.faceA === led.a ? gap.legB : gap.legA;
+      // Axis from GND→PWR (fall back to the hinge perpendicular if the pinched legs coincide).
+      let ax = pwrLeg.x - gndLeg.x, ay = pwrLeg.y - gndLeg.y;
+      let al = Math.hypot(ax, ay);
+      if (al < 1e-6) {
+        const [e0, e1] = gap.ends; // perpendicular to the shared edge
+        ax = -(e1.y - e0.y); ay = e1.x - e0.x; al = Math.hypot(ax, ay) || 1;
+      }
+      ax /= al; ay /= al;
       const r = this.markerR();
-      // Two legs reaching onto the two tiles, then the body across the gap.
-      parts.push(`<line x1="${fmt(a.x)}" y1="${fmt(a.y)}" x2="${fmt(c.x)}" y2="${fmt(c.y)}" class="${legCls}" />`);
-      parts.push(`<line x1="${fmt(b.x)}" y1="${fmt(b.y)}" x2="${fmt(c.x)}" y2="${fmt(c.y)}" class="${legCls}" />`);
-      parts.push(`<circle cx="${fmt(a.x)}" cy="${fmt(a.y)}" r="${fmt(r * 0.45)}" class="el-led-pad" />`);
-      parts.push(`<circle cx="${fmt(b.x)}" cy="${fmt(b.y)}" r="${fmt(r * 0.45)}" class="el-led-pad" />`);
-      parts.push(`<circle cx="${fmt(c.x)}" cy="${fmt(c.y)}" r="${fmt(r)}" class="${cls}" />`);
+      const sep = r * 1.25; // half the pad-to-pad distance — noticeable but compact
+      const rPad = r * 0.62;
+      const pwr = this.tp({ x: mid.x + ax * sep, y: mid.y + ay * sep });
+      const gnd = this.tp({ x: mid.x - ax * sep, y: mid.y - ay * sep });
+      const o = orphan ? " el-led-orphan" : "";
+      // LED chip bridging the two pads, then the two coloured pads on top.
+      parts.push(
+        `<line x1="${fmt(pwr.x)}" y1="${fmt(pwr.y)}" x2="${fmt(gnd.x)}" y2="${fmt(gnd.y)}" class="el-led-body${o}" stroke-width="${fmt(rPad * 0.9)}" />`,
+      );
+      parts.push(`<circle cx="${fmt(pwr.x)}" cy="${fmt(pwr.y)}" r="${fmt(rPad)}" class="el-led-pwr${o}" />`);
+      parts.push(`<circle cx="${fmt(gnd.x)}" cy="${fmt(gnd.y)}" r="${fmt(rPad)}" class="el-led-gnd${o}" />`);
     });
-    // Battery marker (square) on its tile.
+    // Battery: two terminal squares — PWR (+) red and GND (−) dark — so each net leaves its own pad.
     if (this.circuit.battery) {
       const f = this.faces[this.circuit.battery.face];
       if (f) {
-        const c = this.tp(f.centroid);
-        const r = this.markerR() * 1.2;
-        parts.push(
-          `<rect x="${fmt(c.x - r)}" y="${fmt(c.y - r)}" width="${fmt(2 * r)}" height="${fmt(2 * r)}" class="el-batt" />`,
-        );
+        const term = this.routed?.terminals ?? this.defaultTerminals(f.centroid);
+        const rSq = this.markerR() * 0.95;
+        const sq = (p: Vec2, cls: string, sign: string): void => {
+          const c = this.tp(p);
+          parts.push(
+            `<rect x="${fmt(c.x - rSq)}" y="${fmt(c.y - rSq)}" width="${fmt(2 * rSq)}" height="${fmt(2 * rSq)}" rx="${fmt(rSq * 0.22)}" class="${cls}" />`,
+          );
+          parts.push(`<text x="${fmt(c.x)}" y="${fmt(c.y)}" class="el-batt-sign" font-size="${fmt(rSq * 1.5)}">${sign}</text>`);
+        };
+        sq(term.gnd, "el-batt el-batt-gnd", "−");
+        sq(term.pwr, "el-batt el-batt-pwr", "+");
       }
     }
     this.svg.innerHTML = parts.join("");
@@ -445,6 +459,12 @@ export class ElectronicsModal {
     return this.diag() * 0.016;
   }
 
+  /** Battery terminals before any LED is routed: side-by-side either side of the battery centre. */
+  private defaultTerminals(c: Vec2): { pwr: Vec2; gnd: Vec2 } {
+    const h = this.markerR() * 1.5;
+    return { pwr: { x: c.x + h, y: c.y }, gnd: { x: c.x - h, y: c.y } };
+  }
+
   private diag(): number {
     return Math.hypot(this.bounds.maxX - this.bounds.minX, this.bounds.maxY - this.bounds.minY) || 1;
   }
@@ -453,10 +473,9 @@ export class ElectronicsModal {
     const n = this.circuit.leds.length;
     const batt = this.circuit.battery ? "battery set" : "no battery";
     const orphans = this.routed?.unreachable?.length ?? 0;
-    let msg = `${n} LED${n === 1 ? "" : "s"} · ${batt} · PWR/GND`;
-    if (this.gaps.length === 0 && n === 0) msg += " — no gaps to bridge in this pattern";
-    else if (!this.circuit.battery && n > 0) msg += " — place a battery to route";
-    else if (orphans > 0) msg += ` — ${orphans} LED${orphans === 1 ? "" : "s"} unreachable (no gap path)`;
+    let msg = `${n} LED${n === 1 ? "" : "s"} · ${batt}`;
+    if (!this.circuit.battery && n > 0) msg += " · add a battery to route";
+    else if (orphans > 0) msg += ` · ${orphans} unreachable`;
     this.statusEl.textContent = msg;
   }
 }

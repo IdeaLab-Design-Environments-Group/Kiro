@@ -14,6 +14,7 @@ import "./styles.css";
 import { AppStore } from "./model/app-store.js";
 import { ConvertPanel } from "./view/convert-panel.js";
 import { ViewerFrame } from "./view/viewer-frame.js";
+import { installResizableLayout } from "./view/layout.js";
 import { HeaderActions } from "./view/header-actions.js";
 import { SimModal } from "./view/sim-modal.js";
 import { ExportModal } from "./view/export-modal.js";
@@ -31,6 +32,7 @@ const store = new AppStore();
 const convert = new ConvertPanel();
 const viewer = new ViewerFrame();
 app.append(convert.element, viewer.element);
+installResizableLayout(app, convert.element, viewer.element);
 
 const simModal = new SimModal();
 const exportModal = new ExportModal();
